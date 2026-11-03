@@ -1,5 +1,11 @@
 # dsh-porthole
 
+<p align="center">
+  <a href="https://github.com/Henvy-Mango/dsh-porthole/actions/workflows/test.yml"><img src="https://github.com/Henvy-Mango/dsh-porthole/actions/workflows/test.yml/badge.svg" alt="test" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A522.19%20%7C%20%E2%89%A524-339933" alt="node" /></a>
+</p>
+
 > DeepSeek Harness 的**局域网门户**：在手机上打开一个地址，继续用你电脑上的 DSH。
 > 舷窗（porthole）——船身开的一扇小窗，只在舱内看得见。窗外是 frps / EasyTier，
 > 窗内永远是这台电脑。
