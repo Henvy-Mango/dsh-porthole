@@ -70,10 +70,24 @@ DSH 会自动加载 `client/client.js`。装好后**重启宿主**，进 **设�
 - name: 'dsh-porthole'
   config:
     port: 3082          # 门户监听端口，1024–65535；外部链路（frps / EasyTier）指向它
+    host: 0.0.0.0       # 监听地址；挂 nginx 做唯一入口时改 127.0.0.1
+    basePath: ''        # 挂在二级目录（如 /dsh）时填前缀；'' = 站点根
     sseKeepalive: true  # SSE 空闲保活，默认开
     lan:
       selectedIp: 192.168.1.20   # 固定网卡；留空 = 自动挑最佳
 ```
+
+### 挂在 nginx 后面
+
+支持**子域名**与**二级目录**两种挂法，完整配置（含 WebSocket、SSE、Cookie Path、
+回环身份防伪与排错表）见 **[docs/nginx.md](./docs/nginx.md)**。
+
+两个容易踩的点先提醒：
+
+- nginx 必须转发**真实 Host**（`proxy_set_header Host $host;`）——
+  porthole 靠 Host 判断请求是否来自本机回环，固定成 `127.0.0.1` 会让远程请求被误判；
+- 二级目录必须在 nginx 的 `proxy_pass` 里带尾斜杠（剥掉前缀），
+  并在插件侧配 `basePath: /dsh`，否则扫码登录后会跳回站点根 404。
 
 运行期状态落在 `~/.dsh/dsh-porthole/`：
 

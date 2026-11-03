@@ -178,7 +178,7 @@ test('模式：password_only 下 URL token 被忽略', async () => {
   auth.allowLoopback = false;
 
   const viaToken = auth.verifyRequest({
-    headers: {},
+    headers: { host: '127.0.0.1:3082' },
     socket: { remoteAddress: '192.168.1.9' },
     url: `/?auth=${encodeURIComponent(auth.secretToken)}`,
   });
@@ -186,7 +186,7 @@ test('模式：password_only 下 URL token 被忽略', async () => {
 
   const session = auth.createSession();
   const viaCookie = auth.verifyRequest({
-    headers: { cookie: `dsh_bridge_auth=${session}` },
+    headers: { cookie: `dsh_portal_auth=${session}` },
     socket: { remoteAddress: '192.168.1.9' },
     url: '/',
   });
@@ -199,7 +199,7 @@ test('模式：token_and_password 下 token 与密码都放行', async () => {
   await auth.setPassword('guest-pass');
   auth.allowLoopback = false;
   const viaToken = auth.verifyRequest({
-    headers: {},
+    headers: { host: '127.0.0.1:3082' },
     socket: { remoteAddress: '192.168.1.9' },
     url: `/?auth=${encodeURIComponent(auth.secretToken)}`,
   });
@@ -547,7 +547,7 @@ async function withProxy(handler) {
 
 test('loopback-token：本机 + 回环 Host 才签发', async () => {
   await withProxy(async ({ port }) => {
-    const res = await rawGet(port, '/__dsh_bridge_lite__/loopback-token');
+    const res = await rawGet(port, '/__dsh_porthole__/loopback-token');
     assert.equal(res.status, 200, `应签发，实际：${res.head.slice(0, 100)}`);
     const data = JSON.parse(res.body);
     assert.equal(data.ok, true);
@@ -558,7 +558,7 @@ test('loopback-token：本机 + 回环 Host 才签发', async () => {
 
 test('loopback-token：Host 不是回环时拒绝（防反代借用回环身份）', async () => {
   await withProxy(async ({ port }) => {
-    const res = await rawGet(port, '/__dsh_bridge_lite__/loopback-token', { Host: 'evil.example.com' });
+    const res = await rawGet(port, '/__dsh_porthole__/loopback-token', { Host: 'evil.example.com' });
     assert.equal(res.status, 403);
     assert.match(res.body, /loopback only/);
   });
@@ -566,7 +566,7 @@ test('loopback-token：Host 不是回环时拒绝（防反代借用回环身份�
 
 test('loopback-token：带未授权 Origin 直接 403，且不签发', async () => {
   await withProxy(async ({ port }) => {
-    const res = await rawGet(port, '/__dsh_bridge_lite__/loopback-token', {
+    const res = await rawGet(port, '/__dsh_porthole__/loopback-token', {
       Origin: 'https://evil.example.com',
     });
     assert.equal(res.status, 403);
@@ -578,7 +578,7 @@ test('loopback-token：带未授权 Origin 直接 403，且不签发', async () 
 test('loopback-token：允许来源可跨域读取并回显 ACAO', async () => {
   await withProxy(async ({ port, service }) => {
     const allowed = service.allowedOrigins()[0];
-    const res = await rawGet(port, '/__dsh_bridge_lite__/loopback-token', { Origin: allowed });
+    const res = await rawGet(port, '/__dsh_porthole__/loopback-token', { Origin: allowed });
     assert.equal(res.status, 200);
     assert.match(res.head.toLowerCase(), /access-control-allow-origin:/);
   });
@@ -586,7 +586,7 @@ test('loopback-token：允许来源可跨域读取并回显 ACAO', async () => {
 
 test('loopback-token：opaque origin 字面量 null 永不授权', async () => {
   await withProxy(async ({ port }) => {
-    const res = await rawGet(port, '/__dsh_bridge_lite__/loopback-token', { Origin: 'null' });
+    const res = await rawGet(port, '/__dsh_porthole__/loopback-token', { Origin: 'null' });
     assert.equal(res.status, 403);
   });
 });

@@ -143,13 +143,13 @@ test('开启认证后：远程请求被 401 拦下，密码登录后放行，tok
     assert.equal(blockedApi.status, 401);
     assert.match(blockedApi.body, /unauthorized/);
 
-    const wrong = await post(port, '/__dsh_bridge_lite__/login', { password: 'nope' });
+    const wrong = await post(port, '/__dsh_porthole__/login', { password: 'nope' });
     assert.equal(wrong.status, 401);
 
-    const right = await post(port, '/__dsh_bridge_lite__/login', { password: 'hunter2' });
+    const right = await post(port, '/__dsh_porthole__/login', { password: 'hunter2' });
     assert.equal(right.status, 200);
     const setCookie = right.headers['set-cookie'][0];
-    assert.match(setCookie, /dsh_bridge_auth=/);
+    assert.match(setCookie, /dsh_portal_auth=/);
 
     const cookie = setCookie.split(';')[0];
     const allowed = await get(port, '/', { cookie });
@@ -161,7 +161,7 @@ test('开启认证后：远程请求被 401 拦下，密码登录后放行，tok
     const tokenPass = await get(port, `/?auth=${encodeURIComponent(auth.secretToken)}`);
     assert.equal(tokenPass.status, 302);
     assert.equal(tokenPass.headers.location, '/');
-    assert.match(tokenPass.headers['set-cookie'][0], /dsh_bridge_auth=/);
+    assert.match(tokenPass.headers['set-cookie'][0], /dsh_portal_auth=/);
 
     await proxy.stop();
   } finally {

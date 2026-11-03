@@ -7,7 +7,7 @@
 //   4. 应急复位说明
 //
 // 管理员权限模型（与上游一致）：
-//   - 本机浏览器（127.0.0.1）进面板时自动向 /__dsh_bridge_lite__/loopback-token 领取
+//   - 本机浏览器（127.0.0.1）进面板时自动向 /__dsh_porthole__/loopback-token 领取
 //     adminToken，无需输密码；
 //   - 局域网访客进面板时拿不到令牌，改动安全配置会被服务端拒绝，
 //     面板据此弹出"输入管理密码解锁"。
@@ -22,7 +22,7 @@ const name = 'dsh-porthole';
 const inject = ['slots', 'connection'];
 
 const BRIDGE_RPC_CHANNEL = '/dsh-porthole';
-const ENDPOINT_PREFIX = '/__dsh_bridge_lite__';
+const ENDPOINT_PREFIX = '/__dsh_porthole__';
 
 // 与 lib/rpc.js 的端点表保持一致，由 test/unit.test.mjs 的契约用例防漂移
 const EP = {

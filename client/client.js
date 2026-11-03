@@ -35,7 +35,7 @@ module.exports = __toCommonJS(index_exports);
 var name = "dsh-porthole";
 var inject = ["slots", "connection"];
 var BRIDGE_RPC_CHANNEL = "/dsh-porthole";
-var ENDPOINT_PREFIX = "/__dsh_bridge_lite__";
+var ENDPOINT_PREFIX = "/__dsh_porthole__";
 var EP = {
   getStatus: "getStatus",
   setLanIp: "setLanIp",

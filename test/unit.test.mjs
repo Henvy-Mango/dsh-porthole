@@ -62,12 +62,12 @@ test('认证：开启后远程请求被拦，本机回环放行', async () => {
   const remote = auth.verifyRequest({ headers: {}, socket: { remoteAddress: '192.168.1.50' }, url: '/' });
   assert.equal(remote.authenticated, false);
 
-  const local = auth.verifyRequest({ headers: {}, socket: { remoteAddress: '::1' }, url: '/' });
+  const local = auth.verifyRequest({ headers: { host: '127.0.0.1:3082' }, socket: { remoteAddress: '::1' }, url: '/' });
   assert.equal(local.authenticated, true);
 
   // allowLoopback=false 后本机也要登录
   auth.allowLoopback = false;
-  const localStrict = auth.verifyRequest({ headers: {}, socket: { remoteAddress: '127.0.0.1' }, url: '/' });
+  const localStrict = auth.verifyRequest({ headers: { host: '127.0.0.1:3082' }, socket: { remoteAddress: '127.0.0.1' }, url: '/' });
   assert.equal(localStrict.authenticated, false);
   auth.dispose();
 });

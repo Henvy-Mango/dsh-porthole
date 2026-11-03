@@ -123,7 +123,7 @@ test('WebSocket：开启认证后无凭证的升级请求被 401 拒绝', async 
     // 带有效会话 cookie 则放行
     const token = auth.createSession();
     const allowed = await upgrade(proxy.listenPort, '/plugins/events', {
-      Cookie: `dsh_bridge_auth=${token}`,
+      Cookie: `dsh_portal_auth=${token}`,
     });
     assert.equal(allowed.status, 101, '已认证 WS 升级应成功');
     allowed.socket.destroy();
