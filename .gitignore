@@ -1,0 +1,61 @@
+# ---- 依赖 ----
+node_modules/
+.pnpm-store/
+
+# ---- 构建产物 ----
+# client/client.js 是 esbuild 打包结果，但它是插件运行必需的文件
+# （DSH 直接加载它，不会重新构建），所以**必须提交**，不在此忽略。
+
+# ---- 打包 / 发布 ----
+*.tgz
+*.tar.gz
+.npm/
+.publish-*
+
+# ---- 测试与覆盖率 ----
+coverage/
+.nyc_output/
+*.lcov
+test/_*.mjs
+test/**/fixtures/tmp/
+test/**/*-debug.mjs
+
+# ---- 日志 ----
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+logs/
+
+# ---- 本地运行期状态（插件数据目录，绝不应进仓库） ----
+# 实际位置在 ~/.dsh/dsh-porthole/，此处防御性忽略（例如误在仓库根跑测试时生成）
+/config.json
+/sessions.json
+/reset-auth
+.dsh/
+
+# ---- 编辑器 / 系统 ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 环境变量与密钥 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+.credentials.yaml
+
+# ---- 临时文件 ----
+*.tmp
+*.bak
+.cache/
+.tmp/

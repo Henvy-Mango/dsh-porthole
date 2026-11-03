@@ -1,0 +1,57 @@
+{
+  "name": "dsh-porthole",
+  "version": "1.2.0",
+  "description": "DSH 局域网访问桥（Lite）：反向代理 + 局域网二维码 + 双密码访问认证 + 会话投影剥离 + 远程工作区管理。",
+  "releaseNotes": "【v1.2.0】① 迁移会话投影剥离：session/list 响应移除 contextHeaders/contextTimeline（支持 gzip），实机 9/9 会话验证，手机端首次加载列表的流量降一个量级；② 迁移远程工作区管理（仅面板，无手机端）：目录浏览 + 一键注册进 DSH workspaceRegistry 并挂接会话，敏感目录/系统目录/符号链接逃逸全量过滤，未设密码时强制先设密码；③ 修复上游同款 bug：原版 service.ctx 从未赋值导致工作区从不真正注册，Lite 显式接线并实机验证；④ §4.1 polyfill 实测关闭：DSH 0.2.1-rc.5 前端不含 randomUUID 调用。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./client/client.js",
+    "./locale/*": "./locale/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "GAP-REPORT.md"
+  ],
+  "scripts": {
+    "build:client": "node client/build.mjs",
+    "prepack": "npm run build:client",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  }
+}
