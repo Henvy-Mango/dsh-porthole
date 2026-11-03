@@ -77,6 +77,18 @@ function get(port, path, headers = {}) {
   });
 }
 
+function getBuf(port, path, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function post(port, path, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -116,7 +128,8 @@ test('转发：hop-by-hop 头被剔除，Referer 只换 origin 保留路径', ()
   const { headers } = loopbackHeaders({ host: '192.168.1.5:3082', referer: 'http://192.168.1.5:3082/a?b=1', 'accept-encoding': 'gzip' }, 3080);
   assert.equal(headers.host, '127.0.0.1:3080');
   assert.equal(headers.referer, 'http://127.0.0.1:3080/a?b=1');
-  assert.equal(headers['accept-encoding'], undefined);
+  // 必须保留：交给 DSH 自行压缩（实测主 bundle 941 KB → 320 KB）
+  assert.equal(headers['accept-encoding'], 'gzip', '不得剥掉 accept-encoding');
 });
 
 test('转发：WebSocket 升级成功；未认证时被 401 拒绝', async () => {
@@ -274,4 +287,68 @@ test('登录：提交后能真正进入（端到端走一遍前缀下的登录�
     assert.equal(page.status, 200, '登录后应能打开 /dsh/');
     assert.match(page.body, /upstream:\//, '应拿到 DSH 页面');
   });
+});
+
+// ---------- 4. 压缩与剥离的交互（最脆弱的一条路径） ----------
+
+test('压缩：客户端要 gzip 时透传上游压缩，不自行解压重编码', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const payload = gzipSync(Buffer.from('<html>hi</html>'));
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
+    res.end(payload);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  const home = await mkdtemp(join(tmpdir(), 'gz-'));
+  await writeFile(join(home, '.credentials.yaml'), 'client-connection/browser-session:\n  payload:\n    secret: abc\n');
+  const prev = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const proxy = new LiteProxy({ listenPort: 0, targetPort: server.address().port, authManager: new AuthManager({ config: {}, sessionsFile: join(home, 's.json') }) });
+  await proxy.start();
+  try {
+    const res = await getBuf(proxy.listenPort, '/');
+    assert.equal(res.headers['content-encoding'], 'gzip', '上游压缩应原样透传');
+    assert.equal(res.body.length, payload.length, '不得被代理解压');
+    assert.ok(res.body.equals(payload), '字节必须一致');
+  } finally {
+    await proxy.stop();
+    server.close();
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev;
+  }
+});
+
+test('压缩：session/list 为 gzip 时，剥离后必须去掉 content-encoding 并重算长度', async () => {
+  const { gzipSync } = await import('node:zlib');
+  // 上游返回 **gzip 压缩** 的 session/list，且带大字段
+  const raw = JSON.stringify({
+    result: { ok: true, value: { items: [{ id: 's1', projections: { values: { contextHeaders: 'x'.repeat(4000), contextTimeline: 'y'.repeat(4000), keep: 1 } } }] } },
+  });
+  const gz = gzipSync(Buffer.from(raw));
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+    res.end(gz);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  const home = await mkdtemp(join(tmpdir(), 'gz2-'));
+  await writeFile(join(home, '.credentials.yaml'), 'client-connection/browser-session:\n  payload:\n    secret: abc\n');
+  const prev = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const proxy = new LiteProxy({ listenPort: 0, targetPort: server.address().port, authManager: new AuthManager({ config: {}, sessionsFile: join(home, 's.json') }) });
+  await proxy.start();
+  try {
+    const res = await get(proxy.listenPort, '/api/session/list');
+    assert.equal(res.headers['content-encoding'], undefined, '剥离后必须声明为明文');
+    assert.equal(Number(res.headers['content-length']), res.body.length, '长度必须与实际 body 一致');
+    const json = JSON.parse(res.body);
+    const proj = json.result.value.items[0].projections.values;
+    assert.equal(proj.contextHeaders, undefined, '大字段必须被剥离');
+    assert.equal(proj.keep, 1, '无关字段保留');
+    assert.ok(res.body.length < raw.length, '剥离后应小于原始明文');
+  } finally {
+    await proxy.stop();
+    server.close();
+    if (prev === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prev;
+  }
 });

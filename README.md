@@ -1,7 +1,6 @@
 # dsh-porthole
 
 <p align="center">
-  <a href="https://github.com/Henvy-Mango/dsh-porthole/actions/workflows/test.yml"><img src="https://github.com/Henvy-Mango/dsh-porthole/actions/workflows/test.yml/badge.svg" alt="test" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%E2%89%A522.19%20%7C%20%E2%89%A524-339933" alt="node" /></a>
 </p>
@@ -29,6 +28,7 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 | **二级目录挂载** | 可挂在 `/dsh` 这类前缀下（nginx 子路径）；设了前缀即**强制严格模式**：根路径 302 过去、未挂载路径 404，并带防重定向循环保护 |
 | **监听地址可选** | `0.0.0.0`（全部网卡）/ `127.0.0.1`（仅本机）/ 任意本机网卡 IP；展示的 IP 跟随绑定值 |
 | **访问地址自洽** | 面板顶部地址、复制按钮、二维码统一带前缀且以 `/` 结尾（如 `http://192.168.1.103:3082/dsh/`） |
+| **保留 DSH 压缩** | 转发客户端的 `Accept-Encoding`，让 DSH 自己的 gzip 生效（实测主 bundle 941 KB → 320 KB）；上游为注入 HTML 会删掉该头，等于关掉压缩 |
 | 会话投影剥离 | `session/list` 移除 `contextHeaders` / `contextTimeline`（每会话可达数 MB、无 UI 读取）；支持 gzip，剥离失败一律原样直通 |
 | 多网卡识别 | 物理 Wi-Fi / 有线网卡优先，WSL / VMware / Docker / Hyper-V / Mihomo / Clash 大幅降权 |
 | 二维码 | 扫码免密直通；开启门禁时内嵌 256-bit token |
@@ -62,6 +62,7 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 | 工作区真正注册 | 原版 `BridgeService.this.ctx` 从未赋值，`addWorkspace` 只做安全校验便返回，**从不真正注册**；这里显式接线并实机验证 |
 | macOS 临时目录可用 | 原版 POSIX 黑名单里笼统的 `/private` 会把 `/private/var/folders/...`（macOS 所有临时目录）误判为系统目录 |
 | 反代不漏门禁 | 原版回环免密允许空 `Host`，nginx 漏配 `proxy_set_header Host` 时等于全站免密；这里要求 Host 必须是回环名 |
+| **保留响应压缩** | 原版为注入 HTML 会删掉 `accept-encoding`，等于把 DSH 自带的 gzip 关掉（主 bundle 941 KB 全量传输）；这里原样转发，实测降到 320 KB |
 | 宿主兼容 | 两个版本都需要 `connection-compat` 绕过 DSH 的 RPC 注册回归；这里同样内置，并在上游修复后自动空转 |
 
 > 取舍一句话：**原版是「一个插件解决全部远程访问」，这里是「只做门户，传输交给外部工具」。**
@@ -202,7 +203,7 @@ dsh-porthole: [保命救急] 检测到 reset-auth 标记文件，已重置所有
 ## 开发
 
 ```bash
-npm test                                    # 27 个用例（核心链路 / 认证 / 附加能力）
+npm test                                    # 33 个用例（核心链路 / 认证 / 附加能力）
 npm run build:client                        # client/index.js → client/client.js
 node test/manual-auth.mjs 34567             # 手工验收：跑一遍完整认证流程
 ```
