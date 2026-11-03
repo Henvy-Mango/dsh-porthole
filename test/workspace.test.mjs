@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, isAbsolute } from 'node:path';
 
 import { isSessionProjectionPath, stripSessionProjections } from '../lib/session-strip.js';
 import { isSafeWorkspacePath, isSensitiveFolderName } from '../lib/security/path-validator.js';
@@ -93,13 +93,25 @@ const W = (s) => s.split('/').join(BS);
 
 test('路径校验：系统目录 / 敏感段 / UNC / 空值全部拦截', async () => {
   const deny = async (p) => (await isSafeWorkspacePath(p)).valid;
-  assert.equal(await deny(W('C:/Windows')), false, 'Windows 系统目录');
-  assert.equal(await deny(W('C:/Program Files/app')), false);
+
+  // 与平台无关：敏感段黑名单在 Windows 与 POSIX 上走同一套名单
   assert.equal(await deny(W('C:/Users/x/.ssh')), false, '敏感隐藏目录');
   assert.equal(await deny(W('C:/Users/x/project/.git')), false);
-  assert.equal(await deny('//server/share'), false, 'UNC');
+  assert.equal(await deny(join(homedir(), '.ssh')), false, 'POSIX 形态的敏感目录同样拦截');
   assert.equal(await deny(''), false);
   assert.equal(await deny(null), false);
+
+  // 平台专属的拦截面：只在对应平台上断言。
+  // 跨平台写死会在 CI 上因「路径不存在」而以别的原因失败（实际踩过）。
+  if (process.platform === 'win32') {
+    assert.equal(await deny(W('C:/Windows')), false, 'Windows 系统目录');
+    assert.equal(await deny(W('C:/Program Files/app')), false);
+    assert.equal(await deny(W('//server/share')), false, 'UNC 网络共享');
+  } else {
+    assert.equal(await deny('/etc/passwd'), false, 'POSIX 系统目录');
+    assert.equal(await deny('/proc/self/environ'), false);
+  }
+
   assert.equal(isSensitiveFolderName('.env'), true);
   assert.equal(isSensitiveFolderName('id_rsa'), true);
   assert.equal(isSensitiveFolderName('my.projects'), false, '普通目录不得误伤');
@@ -108,7 +120,9 @@ test('路径校验：系统目录 / 敏感段 / UNC / 空值全部拦截', async
 test('路径校验：真实存在的普通目录通过，且返回归一化路径', async () => {
   const r = await isSafeWorkspacePath(wsFixture);
   assert.equal(r.valid, true);
-  assert.match(r.path, /^[A-Za-z]:\\/, '应返回绝对路径');
+  // 跨平台断言：只要求「是绝对路径」（Windows 盘符 / POSIX 根），
+  // 不能写死 `C:\` —— 否则 Linux/macOS 的 CI 必挂。
+  assert.equal(isAbsolute(r.path), true, '应返回绝对路径');
   assert.ok(r.realPath);
 });
 
