@@ -30,6 +30,7 @@ const EP = {
   setLanIp: 'setLanIp',
   setPort: 'setPort',
   restartProxy: 'restartProxy',
+  setProxyConfig: 'setProxyConfig',
   getQr: 'getQr',
   diagnose: 'diagnose',
   authGetStatus: 'authGetStatus',
@@ -153,6 +154,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [guestPassword, setGuestPassword] = React.useState('');
   const [adminPasswordNew, setAdminPasswordNew] = React.useState('');
   const [portVal, setPortVal] = React.useState('');
+  const [basePathVal, setBasePathVal] = React.useState('');
+  const [hostVal, setHostVal] = React.useState('0.0.0.0');
 
   // 工作区：已注册列表 + 目录浏览状态
   const [wsList, setWsList] = React.useState(null);
@@ -170,6 +173,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       if (res?.ok) {
         setStatus(res.value);
         setPortVal(String(res.value.proxy.port));
+        setBasePathVal(res.value.basePath || '');
+        setHostVal(res.value.host || '0.0.0.0');
         return res.value;
       }
       setMsg({ kind: 'bad', text: res?.error?.message ?? '读取状态失败' });
@@ -656,7 +661,43 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         '添加后 DSH 会把目录注册为工作区，并创建一个以它为工作目录的会话。'
         + '.ssh / .git 等敏感目录与系统目录已默认屏蔽。')),
 
-    // 4. 自检
+    // 4. 反向代理接入（nginx 子目录 / 监听地址）
+    h(Card, { title: '反向代理接入' },
+      h(Row, { label: '二级目录' },
+        h('input', {
+          style: S.input,
+          placeholder: '留空 = 站点根；填 /dsh 表示 https://域名/dsh/',
+          value: basePathVal,
+          disabled: busy || !adminToken,
+          onChange: (e) => setBasePathVal(e.target.value),
+        })),
+      h(Row, { label: '监听地址' },
+        h('select', {
+          style: S.input,
+          value: hostVal,
+          disabled: busy || !adminToken,
+          onChange: (e) => setHostVal(e.target.value),
+        },
+          h('option', { value: '0.0.0.0' }, '0.0.0.0 — 局域网可直连（默认）'),
+          h('option', { value: '127.0.0.1' }, '127.0.0.1 — 仅本机/nginx 可连'))),
+      h(Row, { label: '' },
+        h('button', {
+          style: S.btnPrimary,
+          disabled: busy || !adminToken,
+          onClick: async () => {
+            const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
+            if (v) setMsg({ kind: 'ok', text: `已保存：门户挂在 ${v.basePath || '站点根'}，监听 ${v.host}` });
+          },
+        }, '应用并保存')),
+      h('p', { style: { ...S.warn, margin: '4px 0 0' } },
+        '⚠️ 二级目录必须与 nginx 的 location 前缀逐字一致（例如 location /dsh/ 对应 /dsh）。'),
+      h('p', { style: S.hint },
+        '填错后当前访问路径会失效：请改用本机 127.0.0.1 打开面板改回，'
+        + '或编辑 ~/.dsh/dsh-porthole/config.json 里的 basePath 后重启宿主。'
+        + '监听改为 127.0.0.1 后，手机将不能直连，必须走 nginx。'
+        + '完整配置见仓库 docs/nginx.md。')),
+
+    // 5. 自检
     h(Card, { title: '自检' },
       h(Row, { label: '检查' },
         h('button', {
@@ -672,7 +713,13 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
             h('span', { style: { width: 14, textAlign: 'center' } }, c.ok ? '✓' : (c.warnOnly ? '!' : '✗')),
             h('span', { style: { minWidth: 92, fontWeight: 500 } }, c.label),
             h('span', { style: c.ok ? S.ok : (c.warnOnly ? S.warn : S.bad) }, c.detail))))
-        : h('p', { style: S.hint }, '点「运行自检」检查上游服务、代理端口、网卡、回环凭据与门禁状态。')));
+        : h('p', { style: S.hint }, '点「运行自检」检查上游服务、代理端口、网卡、回环凭据与门禁状态。')),
+
+    // 版本页脚：排障第一眼要看的东西（升级后是否真的生效、面板与包是否同版本）
+    h('p', { style: { ...S.hint, textAlign: 'center', marginTop: 4 } },
+      `dsh-porthole v${status.version || '(未知)'}`
+      + (status.basePath ? ` · 挂在 ${status.basePath}` : '')
+      + (status.host && status.host !== '0.0.0.0' ? ` · 仅监听 ${status.host}` : '')));
 }
 
 function apply(ctx) {

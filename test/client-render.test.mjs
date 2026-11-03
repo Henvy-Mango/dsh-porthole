@@ -40,7 +40,9 @@ const BASE_AUTH = {
 };
 
 const FAKE_STATUS = {
-  version: '1.0.0',
+  version: '1.3.0',
+  basePath: '/dsh',
+  host: '0.0.0.0',
   dsh: { port: 3080 },
   proxy: { running: true, port: 3082, activeConnections: 3, sseKeepalive: true, error: null },
   lan: {
@@ -96,6 +98,14 @@ test('面板：有数据时渲染四块卡片并正确展示状态', async () =>
   // SSR 不执行 effect：浏览列表处于「读取中…」，交互按钮由客户端拉取数据后出现
   assert.match(html, /已注册/, '工作区卡片应包含已注册列表区');
   assert.match(html, /运行自检/);
+  // 反向代理接入卡片（basePath / host 可配）
+  assert.match(html, /反向代理接入/);
+  assert.match(html, /二级目录/);
+  assert.match(html, /0.0.0.0 — 局域网可直连/);
+  assert.match(html, /应用并保存/);
+  // 版本页脚：升级后是否真的生效，一眼可查
+  assert.match(html, /dsh-porthole v1.3.0/);
+  assert.match(html, /挂在 \/dsh/);
 
   assert.match(html, /http:\/\/192\.168\.1\.20:3082/, '应展示局域网地址');
   assert.match(html, /运行中 · 0\.0\.0\.0:3082 · 3 个连接/, '应展示运行状态与连接数');

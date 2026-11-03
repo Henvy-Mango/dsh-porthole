@@ -41,6 +41,7 @@ var EP = {
   setLanIp: "setLanIp",
   setPort: "setPort",
   restartProxy: "restartProxy",
+  setProxyConfig: "setProxyConfig",
   getQr: "getQr",
   diagnose: "diagnose",
   authGetStatus: "authGetStatus",
@@ -146,6 +147,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [guestPassword, setGuestPassword] = React.useState("");
   const [adminPasswordNew, setAdminPasswordNew] = React.useState("");
   const [portVal, setPortVal] = React.useState("");
+  const [basePathVal, setBasePathVal] = React.useState("");
+  const [hostVal, setHostVal] = React.useState("0.0.0.0");
   const [wsList, setWsList] = React.useState(null);
   const [browse, setBrowse] = React.useState(null);
   const [browseErr, setBrowseErr] = React.useState(null);
@@ -158,6 +161,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       if (res?.ok) {
         setStatus(res.value);
         setPortVal(String(res.value.proxy.port));
+        setBasePathVal(res.value.basePath || "");
+        setHostVal(res.value.host || "0.0.0.0");
         return res.value;
       }
       setMsg({ kind: "bad", text: res?.error?.message ?? "\u8BFB\u53D6\u72B6\u6001\u5931\u8D25" });
@@ -735,7 +740,60 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         "\u6DFB\u52A0\u540E DSH \u4F1A\u628A\u76EE\u5F55\u6CE8\u518C\u4E3A\u5DE5\u4F5C\u533A\uFF0C\u5E76\u521B\u5EFA\u4E00\u4E2A\u4EE5\u5B83\u4E3A\u5DE5\u4F5C\u76EE\u5F55\u7684\u4F1A\u8BDD\u3002.ssh / .git \u7B49\u654F\u611F\u76EE\u5F55\u4E0E\u7CFB\u7EDF\u76EE\u5F55\u5DF2\u9ED8\u8BA4\u5C4F\u853D\u3002"
       )
     ),
-    // 4. 自检
+    // 4. 反向代理接入（nginx 子目录 / 监听地址）
+    h(
+      Card,
+      { title: "\u53CD\u5411\u4EE3\u7406\u63A5\u5165" },
+      h(
+        Row,
+        { label: "\u4E8C\u7EA7\u76EE\u5F55" },
+        h("input", {
+          style: S.input,
+          placeholder: "\u7559\u7A7A = \u7AD9\u70B9\u6839\uFF1B\u586B /dsh \u8868\u793A https://\u57DF\u540D/dsh/",
+          value: basePathVal,
+          disabled: busy || !adminToken,
+          onChange: (e) => setBasePathVal(e.target.value)
+        })
+      ),
+      h(
+        Row,
+        { label: "\u76D1\u542C\u5730\u5740" },
+        h(
+          "select",
+          {
+            style: S.input,
+            value: hostVal,
+            disabled: busy || !adminToken,
+            onChange: (e) => setHostVal(e.target.value)
+          },
+          h("option", { value: "0.0.0.0" }, "0.0.0.0 \u2014 \u5C40\u57DF\u7F51\u53EF\u76F4\u8FDE\uFF08\u9ED8\u8BA4\uFF09"),
+          h("option", { value: "127.0.0.1" }, "127.0.0.1 \u2014 \u4EC5\u672C\u673A/nginx \u53EF\u8FDE")
+        )
+      ),
+      h(
+        Row,
+        { label: "" },
+        h("button", {
+          style: S.btnPrimary,
+          disabled: busy || !adminToken,
+          onClick: async () => {
+            const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
+            if (v) setMsg({ kind: "ok", text: `\u5DF2\u4FDD\u5B58\uFF1A\u95E8\u6237\u6302\u5728 ${v.basePath || "\u7AD9\u70B9\u6839"}\uFF0C\u76D1\u542C ${v.host}` });
+          }
+        }, "\u5E94\u7528\u5E76\u4FDD\u5B58")
+      ),
+      h(
+        "p",
+        { style: { ...S.warn, margin: "4px 0 0" } },
+        "\u26A0\uFE0F \u4E8C\u7EA7\u76EE\u5F55\u5FC5\u987B\u4E0E nginx \u7684 location \u524D\u7F00\u9010\u5B57\u4E00\u81F4\uFF08\u4F8B\u5982 location /dsh/ \u5BF9\u5E94 /dsh\uFF09\u3002"
+      ),
+      h(
+        "p",
+        { style: S.hint },
+        "\u586B\u9519\u540E\u5F53\u524D\u8BBF\u95EE\u8DEF\u5F84\u4F1A\u5931\u6548\uFF1A\u8BF7\u6539\u7528\u672C\u673A 127.0.0.1 \u6253\u5F00\u9762\u677F\u6539\u56DE\uFF0C\u6216\u7F16\u8F91 ~/.dsh/dsh-porthole/config.json \u91CC\u7684 basePath \u540E\u91CD\u542F\u5BBF\u4E3B\u3002\u76D1\u542C\u6539\u4E3A 127.0.0.1 \u540E\uFF0C\u624B\u673A\u5C06\u4E0D\u80FD\u76F4\u8FDE\uFF0C\u5FC5\u987B\u8D70 nginx\u3002\u5B8C\u6574\u914D\u7F6E\u89C1\u4ED3\u5E93 docs/nginx.md\u3002"
+      )
+    ),
+    // 5. 自检
     h(
       Card,
       { title: "\u81EA\u68C0" },
@@ -758,6 +816,12 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         h("span", { style: { minWidth: 92, fontWeight: 500 } }, c.label),
         h("span", { style: c.ok ? S.ok : c.warnOnly ? S.warn : S.bad }, c.detail)
       ))) : h("p", { style: S.hint }, "\u70B9\u300C\u8FD0\u884C\u81EA\u68C0\u300D\u68C0\u67E5\u4E0A\u6E38\u670D\u52A1\u3001\u4EE3\u7406\u7AEF\u53E3\u3001\u7F51\u5361\u3001\u56DE\u73AF\u51ED\u636E\u4E0E\u95E8\u7981\u72B6\u6001\u3002")
+    ),
+    // 版本页脚：排障第一眼要看的东西（升级后是否真的生效、面板与包是否同版本）
+    h(
+      "p",
+      { style: { ...S.hint, textAlign: "center", marginTop: 4 } },
+      `dsh-porthole v${status.version || "(\u672A\u77E5)"}` + (status.basePath ? ` \xB7 \u6302\u5728 ${status.basePath}` : "") + (status.host && status.host !== "0.0.0.0" ? ` \xB7 \u4EC5\u76D1\u542C ${status.host}` : "")
     )
   );
 }

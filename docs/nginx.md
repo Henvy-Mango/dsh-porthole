@@ -160,16 +160,38 @@ server {
 
 ### 3.3 插件侧配置
 
+**方式一：设置面板（推荐，改完立即生效，无需重启）**
+
+进 **设置 → 远程访问 → 反向代理接入**：
+
+- 「二级目录」填 `/dsh`（与 nginx 的 `location` 前缀逐字一致，不要带尾斜杠）；
+- 「监听地址」按需选择；
+- 点「应用并保存」。
+
+`basePath` 只影响插件未来产出的 `Location` 与 `Cookie Path`，保存后**立刻生效**；
+`host` 会触发一次代理重启（需要重新 bind 网卡）。改动都会写入
+`~/.dsh/dsh-porthole/config.json`，重启宿主后依然保持。
+
+> ⚠️ 填错会怎样：登录跳转会落到 nginx 未配置的路径上，表现为扫码后 404。
+> **救援方式**：在电脑上用 `http://127.0.0.1:3082` 打开面板（本机免密，不受 basePath 影响），
+> 或编辑 `config.json` 里的 `basePath` 后重启宿主。
+
+**方式二：配置文件**
+
 ```yaml
 - name: 'dsh-porthole'
   config:
     port: 3082
     basePath: /dsh        # 与 nginx 的 location 前缀一致；不要带尾斜杠
+    host: 0.0.0.0         # 只让 nginx 访问时改 127.0.0.1
 ```
 
-等价写法：`publicPath: /dsh`。
+等价写法：`publicPath: /dsh`。改完需重启宿主生效。
 
-改完重启宿主生效。访问 `https://example.com/dsh/` 即可。
+> 优先级：**面板保存的值优先于 `cordis.yml`**。两者都有时以 `config.json` 为准，
+> 这样面板里的改动不会被下次重启覆盖回去。
+
+访问 `https://example.com/dsh/` 即可。
 
 ### 3.4 二级目录的已知限制
 

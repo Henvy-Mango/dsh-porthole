@@ -11,9 +11,21 @@ import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { normalizeBasePath, LiteProxy, ENDPOINT_PREFIX, AUTH_COOKIE } from '../lib/proxy.js';
+import {
+  normalizeBasePath, validateBasePath, validateHost,
+  LiteProxy, ENDPOINT_PREFIX, AUTH_COOKIE,
+} from '../lib/proxy.js';
 import { AuthManager } from '../lib/auth/manager.js';
 import { BridgeLiteService } from '../lib/service.js';
+import { installRpc, BRIDGE_ENDPOINTS } from '../lib/rpc.js';
+
+/** 组装真实 RPC handler（假 ctx + 假 service），用于断言鉴权，而非本地重实现规则。 */
+function makeRpc(auth, service) {
+  let handler = null;
+  const ctx = { connection: { rpc: { handle: (_ch, fn) => { handler = fn; return () => {}; } } } };
+  installRpc(ctx, { service, authManager: auth, logger: { error: () => {}, warn: () => {} } });
+  return (ep, payload) => handler(ep, payload ?? {});
+}
 
 // ---- 前缀归一化 ----
 
@@ -253,4 +265,100 @@ test('host：默认仍是 0.0.0.0（局域网直连不被破坏）', async () =>
     up.server.close();
     if (prevHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHome;
   }
+});
+
+// ---- 面板里配置 basePath / host ----
+
+test('校验：validateBasePath 区分「空」与「非法」，非法要报错', () => {
+  assert.deepEqual(validateBasePath(''), { ok: true, value: '' });
+  assert.deepEqual(validateBasePath('/'), { ok: true, value: '' });
+  assert.deepEqual(validateBasePath('/dsh'), { ok: true, value: '/dsh' });
+  assert.deepEqual(validateBasePath('dsh/'), { ok: true, value: '/dsh' });
+
+  for (const bad of ['/a/../b', '/有中文', '/' + 'x'.repeat(300)]) {
+    const r = validateBasePath(bad);
+    assert.equal(r.ok, false, `${bad} 应被拒绝`);
+    assert.ok(r.error);
+  }
+});
+
+test('校验：validateHost 只接受 0.0.0.0 / 回环', () => {
+  assert.deepEqual(validateHost(''), { ok: true, value: '0.0.0.0' });
+  assert.deepEqual(validateHost('127.0.0.1'), { ok: true, value: '127.0.0.1' });
+  assert.deepEqual(validateHost('localhost'), { ok: true, value: '127.0.0.1' });
+  assert.equal(validateHost('192.168.1.5').ok, false, '不允许随意绑到其它网卡');
+  assert.equal(validateHost('example.com').ok, false);
+});
+
+test('service：setProxyConfig 改 basePath 立即作用到运行中的代理', async () => {
+  const up = await startUpstream();
+  const home = await mkdtemp(join(tmpdir(), 'bp5-'));
+  const prevHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const auth = new AuthManager({ config: { enabled: true }, sessionsFile: join(home, 's.json') });
+  await auth.setPassword('guest-pass');
+  let persisted = {};
+  const svc = new BridgeLiteService({
+    dshPort: up.port, port: 0, authManager: auth,
+    persist: async (patch) => { persisted = { ...persisted, ...patch }; },
+  });
+  await svc.start();
+  try {
+    await svc.setProxyConfig({ basePath: '/dsh' });
+    assert.equal(svc.basePath, '/dsh');
+    assert.equal(svc.proxy.basePath, '/dsh', '无需重启即生效');
+    assert.equal(persisted.basePath, '/dsh', '必须落盘');
+
+    // 以远程身份触发扫码直通，确认 Location 立刻带上新前缀
+    auth.allowLoopback = false;
+    const res = await get(svc.port, `/?auth=${encodeURIComponent(auth.secretToken)}`, { Host: 'x.example.com' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.location, '/dsh/');
+  } finally {
+    await svc.dispose();
+    auth.dispose();
+    up.server.close();
+    if (prevHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHome;
+  }
+});
+
+test('service：非法 basePath 被拒绝且不改变现状', async () => {
+  const up = await startUpstream();
+  const home = await mkdtemp(join(tmpdir(), 'bp6-'));
+  const prevHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const auth = new AuthManager({ config: {}, sessionsFile: join(home, 's.json') });
+  const svc = new BridgeLiteService({ dshPort: up.port, port: 0, authManager: auth });
+  await svc.start();
+  try {
+    await assert.rejects(() => svc.setProxyConfig({ basePath: '/a/../b' }), /不能包含/);
+    assert.equal(svc.basePath, '', '失败时保持原值');
+    await assert.rejects(() => svc.setProxyConfig({ host: '8.8.8.8' }), /不支持的监听地址/);
+    assert.equal(svc.host, '0.0.0.0');
+  } finally {
+    await svc.dispose();
+    auth.dispose();
+    up.server.close();
+    if (prevHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHome;
+  }
+});
+
+test('RPC：setProxyConfig 需管理员，且未设密码时拒绝', async () => {
+  const auth = new AuthManager({ config: { enabled: true }, sessionsFile: join(tmpdir(), `bp7-${Date.now()}.json`) });
+  const svc = { setProxyConfig: async () => ({ ok: true }) };
+  const rpc = makeRpc(auth, svc);
+
+  const noPw = await rpc(BRIDGE_ENDPOINTS.setProxyConfig, { basePath: '/x' });
+  assert.equal(noPw.ok, false);
+  assert.match(noPw.error.message, /请先.*设置访问密码/);
+
+  await auth.setPassword('guest-pass');
+  const noToken = await rpc(BRIDGE_ENDPOINTS.setProxyConfig, { basePath: '/x' });
+  assert.equal(noToken.ok, false);
+  assert.match(noToken.error.message, /需要管理员权限/);
+
+  const { adminToken } = await auth.unlockAdmin('guest-pass');
+  const okRes = await rpc(BRIDGE_ENDPOINTS.setProxyConfig, { basePath: '/x', adminToken });
+  assert.equal(okRes.ok, true);
+  auth.dispose();
 });

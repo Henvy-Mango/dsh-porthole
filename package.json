@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.2.0",
-  "description": "DSH 局域网访问桥（Lite）：反向代理 + 局域网二维码 + 双密码访问认证 + 会话投影剥离 + 远程工作区管理。",
-  "releaseNotes": "【v1.2.0】① 迁移会话投影剥离：session/list 响应移除 contextHeaders/contextTimeline（支持 gzip），实机 9/9 会话验证，手机端首次加载列表的流量降一个量级；② 迁移远程工作区管理（仅面板，无手机端）：目录浏览 + 一键注册进 DSH workspaceRegistry 并挂接会话，敏感目录/系统目录/符号链接逃逸全量过滤，未设密码时强制先设密码；③ 修复上游同款 bug：原版 service.ctx 从未赋值导致工作区从不真正注册，Lite 显式接线并实机验证；④ §4.1 polyfill 实测关闭：DSH 0.2.1-rc.5 前端不含 randomUUID 调用。",
+  "version": "1.3.0",
+  "description": "DSH 本机门户：反代 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名或二级目录。",
+  "releaseNotes": "【v1.3.0】① 新增「反向代理接入」面板：可视化配置 basePath（nginx 二级目录）与监听地址 host，basePath 保存即生效、host 变更触发代理重启，均持久化到 config.json 且优先于 cordis.yml；② 面板页脚恢复版本号显示（升级后是否真的生效，一眼可查）；③ 支持 nginx 二级目录反代：修正扫码直通 302 的 Location 与会话 Cookie Path，登录页改用相对路径；④ 安全修复：回环免密原先允许 Host 为空，nginx 漏配 proxy_set_header Host 时会导致全站免密；⑤ 修 port=0 时未回填实际监听端口；⑥ 端点前缀与 Cookie 名统一为 porthole / dsh_portal_auth。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
