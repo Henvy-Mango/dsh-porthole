@@ -334,3 +334,20 @@ test('代理集成：session/list 经代理后投影被剥离且 content 头被�
     upstream.server.close();
   }
 });
+
+// ---- 跨平台回归：macOS 临时目录必须可用 ----
+// 上游用笼统的 `/private` 前缀拦截 macOS 系统目录，导致 /private/var/folders/... 
+// （macOS 上所有临时目录的真实位置）被判为敏感目录，任何临时目录都无法作为工作区。
+// 该 bug 由 macOS CI 暴露，此处锁定行为。
+test('路径校验：操作系统临时目录必须被放行（macOS /private 回归）', async () => {
+  const r = await isSafeWorkspacePath(tmpdir());
+  assert.equal(r.valid, true, `临时目录应可用，实际被拒：${r.error}`);
+
+  // macOS 上 realpath 会把 /var → /private/var；显式断言这种形态不被笼统拦截
+  if (process.platform === 'darwin') {
+    const real = await isSafeWorkspacePath('/private/var/folders/x/T/porthole-probe', { allowNonExistent: true });
+    assert.equal(real.valid, true, '/private/var/folders 属正常临时目录，不应被拦截');
+    const rootStill = await isSafeWorkspacePath('/private/var/root/probe', { allowNonExistent: true });
+    assert.equal(rootStill.valid, false, '/private/var/root 仍须拦截');
+  }
+});
