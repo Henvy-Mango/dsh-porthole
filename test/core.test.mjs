@@ -193,15 +193,18 @@ test('门禁：同机反代（来源=127.0.0.1）也无法借用回环免密', a
 
 // ---------- 3. 二级目录 ----------
 
-test('二级目录：直连 /dsh 与 /dsh/ 可用，前缀被剥掉再转发', async () => {
+test('二级目录：/dsh 缺尾斜杠 302 补齐，/dsh/ 正常转发', async () => {
   await withProxy({ basePath: '/dsh' }, async ({ proxy }) => {
-    for (const p of ['/dsh', '/dsh/']) {
-      const res = await get(proxy.listenPort, p, { Host: '127.0.0.1' });
-      assert.equal(res.status, 200, `${p} 应可用`);
-      assert.match(res.body, /upstream:\/</, `${p} 应被转发到 DSH 根路径`);
-    }
+    const noSlash = await get(proxy.listenPort, '/dsh', { Host: '127.0.0.1' });
+    assert.equal(noSlash.status, 302, '缺尾斜杠应规范化');
+    assert.equal(noSlash.headers.location, '/dsh/');
+
+    const res = await get(proxy.listenPort, '/dsh/', { Host: '127.0.0.1' });
+    assert.equal(res.status, 200, '/dsh/ 应可用');
+    assert.match(res.body, /upstream:\/</, '应被转发到 DSH 根路径');
+
     const sub = await get(proxy.listenPort, '/dsh/assets/a.js', { Host: '127.0.0.1' });
-    assert.match(sub.body, /upstream:\/assets\/a\.js/);
+    assert.match(sub.body, /upstream:\/assets\/a\.js/, '前缀必须剥掉再转发');
   });
 });
 
@@ -228,5 +231,47 @@ test('二级目录：内置端点不受严格模式限制（面板要靠它领�
     const res = await get(proxy.listenPort, `${ENDPOINT_PREFIX}/loopback-token`, { Host: `127.0.0.1:${proxy.listenPort}`, Origin: 'http://127.0.0.1:3082' });
     assert.equal(res.status, 200);
     assert.match(JSON.parse(res.body).adminToken, /^[a-f0-9]{48}$/);
+  });
+});
+
+// ---- 登录页与尾斜杠：都不能把人甩出二级目录 ----
+
+test('登录页：登录接口与成功后落点都带挂载前缀', async () => {
+  await withProxy({ basePath: '/dsh', password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy }) => {
+    const res = await get(proxy.listenPort, '/dsh/', { Accept: 'text/html', Host: 'dsh.example.com' });
+    assert.equal(res.status, 401);
+    assert.match(res.body, /fetch\('\/dsh\/__dsh_porthole__\/login'/, '登录接口必须带前缀');
+    assert.match(res.body, /location\.replace\("\/dsh\/"\)/, '登录成功后必须回到 /dsh/ 而不是站点根');
+    assert.doesNotMatch(res.body, /location\.replace\("\/"\)/, '不得跳回站点根');
+  });
+});
+
+test('登录页：站点根模式下仍是根路径', async () => {
+  await withProxy({ password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy }) => {
+    const res = await get(proxy.listenPort, '/', { Accept: 'text/html', Host: 'dsh.example.com' });
+    assert.equal(res.status, 401);
+    assert.match(res.body, /fetch\('\/__dsh_porthole__\/login'/);
+    assert.match(res.body, /location\.replace\("\/"\)/);
+  });
+});
+
+test('二级目录：/dsh 缺尾斜杠时 302 补斜杠（否则相对路径解析错、静态资源 404）', async () => {
+  await withProxy({ basePath: '/dsh' }, async ({ proxy }) => {
+    const res = await get(proxy.listenPort, '/dsh', { Host: '127.0.0.1' });
+    assert.equal(res.status, 302, '应重定向到带斜杠的规范地址');
+    assert.equal(res.headers.location, '/dsh/');
+  });
+});
+
+test('登录：提交后能真正进入（端到端走一遍前缀下的登录）', async () => {
+  await withProxy({ basePath: '/dsh', password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy }) => {
+    const login = await post(proxy.listenPort, '/dsh/__dsh_porthole__/login', { password: 'guest-pass' }, { Host: 'dsh.example.com' });
+    assert.equal(login.status, 200);
+    const cookie = login.headers['set-cookie'][0];
+    assert.match(cookie, /Path=\/dsh/, 'Cookie 必须收敛到前缀');
+
+    const page = await get(proxy.listenPort, '/dsh/', { cookie: cookie.split(';')[0], Host: 'dsh.example.com' });
+    assert.equal(page.status, 200, '登录后应能打开 /dsh/');
+    assert.match(page.body, /upstream:\//, '应拿到 DSH 页面');
   });
 });
