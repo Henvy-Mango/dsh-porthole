@@ -144,6 +144,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [adminToken, setAdminToken] = React.useState(initialAdminToken ?? null);
   const [adminPassword, setAdminPassword] = React.useState("");
   const [unlockErr, setUnlockErr] = React.useState(null);
+  const [adminAutoFetchError, setAdminAutoFetchError] = React.useState(null);
   const [guestPassword, setGuestPassword] = React.useState("");
   const [adminPasswordNew, setAdminPasswordNew] = React.useState("");
   const [portVal, setPortVal] = React.useState("");
@@ -186,20 +187,32 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       if (cancelled || !s) return;
       void loadQr();
       const host = window.location?.hostname || "";
+      const protocol = window.location?.protocol || "";
+      const isDesktopShell = protocol === "dsh-app:";
       const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "";
-      if (!isLocalHost || !s.proxy?.port) return;
+      if (!isLocalHost && !isDesktopShell || !s.proxy?.port) return;
+      const targetHost = isDesktopShell ? "127.0.0.1" : host;
       try {
-        const resp = await fetch(`http://${host}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
+        const resp = await fetch(`http://${targetHost}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
           credentials: "omit"
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          setAdminAutoFetchError(
+            resp.status === 403 ? "\u672C\u673A\u4EE4\u724C\u88AB\u62D2\u7EDD\uFF08\u6765\u6E90\u4E0D\u5728\u767D\u540D\u5355\uFF09\u3002\u53EF\u5728\u300C\u5B89\u5168\u8BA4\u8BC1\u300D\u91CC\u8F93\u7BA1\u7406\u5BC6\u7801\u89E3\u9501\u3002" : `\u672C\u673A\u4EE4\u724C\u83B7\u53D6\u5931\u8D25\uFF08HTTP ${resp.status}\uFF09\uFF0C\u8BF7\u7528\u7BA1\u7406\u5BC6\u7801\u89E3\u9501\u3002`
+          );
+          return;
+        }
         const data = await resp.json();
         if (data?.ok && data.adminToken && !cancelled) {
           setAdminToken(data.adminToken);
+          setAdminAutoFetchError(null);
           await refresh(data.adminToken);
           await loadQr(data.adminToken);
         }
-      } catch {
+      } catch (err) {
+        if (!cancelled) {
+          setAdminAutoFetchError(`\u65E0\u6CD5\u8FDE\u63A5\u95E8\u6237\u7AEF\u53E3 ${s.proxy?.port}\uFF08${err?.message ?? err}\uFF09\uFF0C\u8BF7\u7528\u7BA1\u7406\u5BC6\u7801\u89E3\u9501\u3002`);
+        }
       }
     })();
     return () => {
@@ -367,6 +380,12 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         { style: { ...S.hint, margin: "0 0 10px" } },
         "\u4FEE\u6539\u8BA4\u8BC1\u6A21\u5F0F\u3001\u5BC6\u7801\u3001\u9632\u7BE1\u6539\u7B56\u7565\u9700\u8981\u7BA1\u7406\u5458\u6743\u9650\u3002" + (auth.adminPolicy === "local_only" ? "\u5F53\u524D\u7B56\u7565\u4E3A\u300C\u4EC5\u9650\u7535\u8111\u672C\u673A\u300D\uFF0C\u8BF7\u5728\u7535\u8111\u4E0A\u7528 127.0.0.1 \u6253\u5F00\u672C\u9875\u9762\u3002" : "\u8BF7\u8F93\u5165\u7BA1\u7406\u5BC6\u7801\u89E3\u9501\uFF08\u672A\u5355\u72EC\u8BBE\u7F6E\u7BA1\u7406\u5BC6\u7801\u65F6\uFF0C\u8F93\u5165\u8BBF\u95EE\u5BC6\u7801\u5373\u53EF\uFF09\u3002")
       ),
+      // 本机自动领取令牌失败时说明原因，否则用户只会看到"要输密码"却不知为何
+      adminAutoFetchError ? h(
+        "div",
+        { style: { ...S.warn, fontSize: 12, marginBottom: 8 } },
+        `\u672C\u673A\u81EA\u52A8\u89E3\u9501\u5931\u8D25\uFF1A${adminAutoFetchError}`
+      ) : null,
       auth.adminPolicy === "local_only" ? null : h(
         "div",
         { style: S.row },
@@ -744,6 +763,13 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
     h(
       Card,
       { title: "\u53CD\u5411\u4EE3\u7406\u63A5\u5165" },
+      // 未解锁时不再禁用控件（禁用 = 点了没反应，用户无法判断是"没权限"还是"坏了"），
+      // 而是保持可编辑、点击后由服务端给出明确拒绝原因。
+      !adminToken ? h(
+        "p",
+        { style: { ...S.warn, margin: "0 0 10px" } },
+        "\u5F53\u524D\u672A\u89E3\u9501\u7BA1\u7406\u5458\uFF0C\u4FDD\u5B58\u4F1A\u88AB\u62D2\u7EDD\u3002\u8BF7\u5728\u4E0A\u65B9\u8F93\u5165\u7BA1\u7406\u5BC6\u7801\u89E3\u9501" + (adminAutoFetchError ? `\uFF08\u672C\u673A\u81EA\u52A8\u89E3\u9501\u5931\u8D25\uFF1A${adminAutoFetchError}\uFF09` : "\u3002")
+      ) : null,
       h(
         Row,
         { label: "\u4E8C\u7EA7\u76EE\u5F55" },
@@ -751,7 +777,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           style: S.input,
           placeholder: "\u7559\u7A7A = \u7AD9\u70B9\u6839\uFF1B\u586B /dsh \u8868\u793A https://\u57DF\u540D/dsh/",
           value: basePathVal,
-          disabled: busy || !adminToken,
+          disabled: busy,
           onChange: (e) => setBasePathVal(e.target.value)
         })
       ),
@@ -763,7 +789,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           {
             style: S.input,
             value: hostVal,
-            disabled: busy || !adminToken,
+            disabled: busy,
             onChange: (e) => setHostVal(e.target.value)
           },
           h("option", { value: "0.0.0.0" }, "0.0.0.0 \u2014 \u5C40\u57DF\u7F51\u53EF\u76F4\u8FDE\uFF08\u9ED8\u8BA4\uFF09"),
@@ -775,7 +801,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         { label: "" },
         h("button", {
           style: S.btnPrimary,
-          disabled: busy || !adminToken,
+          disabled: busy,
           onClick: async () => {
             const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
             if (v) setMsg({ kind: "ok", text: `\u5DF2\u4FDD\u5B58\uFF1A\u95E8\u6237\u6302\u5728 ${v.basePath || "\u7AD9\u70B9\u6839"}\uFF0C\u76D1\u542C ${v.host}` });

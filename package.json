@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "DSH 本机门户：反代 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名或二级目录。",
-  "releaseNotes": "【v1.3.0】① 新增「反向代理接入」面板：可视化配置 basePath（nginx 二级目录）与监听地址 host，basePath 保存即生效、host 变更触发代理重启，均持久化到 config.json 且优先于 cordis.yml；② 面板页脚恢复版本号显示（升级后是否真的生效，一眼可查）；③ 支持 nginx 二级目录反代：修正扫码直通 302 的 Location 与会话 Cookie Path，登录页改用相对路径；④ 安全修复：回环免密原先允许 Host 为空，nginx 漏配 proxy_set_header Host 时会导致全站免密；⑤ 修 port=0 时未回填实际监听端口；⑥ 端点前缀与 Cookie 名统一为 porthole / dsh_portal_auth。",
+  "releaseNotes": "【v1.3.1】修复桌面版（Electron, dsh-app://app）下「反向代理接入」等管理类控件点了没反应：面板来源是自定义协议而非 http://127.0.0.1，既没被识别为本机、也不在 CORS 白名单，导致永远拿不到 adminToken。现三处修正——① 客户端识别 dsh-app: 协议并显式打回环地址领令牌；② 服务端白名单加入 dsh-app://app 字面量（仍拒绝 opaque null 与未知来源）；③ 未解锁时不再静默禁用控件，改为可编辑并给出明确原因。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

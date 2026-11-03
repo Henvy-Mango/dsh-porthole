@@ -149,6 +149,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [adminToken, setAdminToken] = React.useState(initialAdminToken ?? null);
   const [adminPassword, setAdminPassword] = React.useState('');
   const [unlockErr, setUnlockErr] = React.useState(null);
+  // 自动领取本机令牌失败的原因（null = 正常或尚未尝试）
+  const [adminAutoFetchError, setAdminAutoFetchError] = React.useState(null);
 
   // 各输入框
   const [guestPassword, setGuestPassword] = React.useState('');
@@ -199,22 +201,46 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       const s = await refresh();
       if (cancelled || !s) return;
       void loadQr();
-      // 本机浏览器自动领 adminToken，免去反复输管理密码
+      // 本机浏览器自动领 adminToken，免去反复输管理密码。
+      //
+      // 三种「本机」形态都要认：
+      //   1. http://127.0.0.1 / localhost / [::1]
+      //   2. dsh-app:// 官方桌面版（窗口来源是自定义协议，hostname 为 'app'，
+      //      不是 127.0.0.1 —— 之前只判 http 形态，导致桌面版永远拿不到令牌，
+      //      表现为「面板控件点了没反应」）
+      //   3. 空 hostname（file: 之类）
       const host = window.location?.hostname || '';
+      const protocol = window.location?.protocol || '';
+      const isDesktopShell = protocol === 'dsh-app:';
       const isLocalHost = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '';
-      if (!isLocalHost || !s.proxy?.port) return;
+      if ((!isLocalHost && !isDesktopShell) || !s.proxy?.port) return;
+      // 桌面壳的 hostname 是 'app'，不能拿来拼 URL —— 一律显式打回环地址
+      const targetHost = isDesktopShell ? '127.0.0.1' : host;
       try {
-        const resp = await fetch(`http://${host}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
+        const resp = await fetch(`http://${targetHost}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
           credentials: 'omit',
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          // 403/network 都不该静默：管理类控件会一直是禁用态，用户只会觉得"点了没反应"
+          setAdminAutoFetchError(
+            resp.status === 403
+              ? '本机令牌被拒绝（来源不在白名单）。可在「安全认证」里输管理密码解锁。'
+              : `本机令牌获取失败（HTTP ${resp.status}），请用管理密码解锁。`,
+          );
+          return;
+        }
         const data = await resp.json();
         if (data?.ok && data.adminToken && !cancelled) {
           setAdminToken(data.adminToken);
+          setAdminAutoFetchError(null);
           await refresh(data.adminToken);
           await loadQr(data.adminToken);
         }
-      } catch { /* 拿不到就走手动解锁路径 */ }
+      } catch (err) {
+        if (!cancelled) {
+          setAdminAutoFetchError(`无法连接门户端口 ${s.proxy?.port}（${err?.message ?? err}），请用管理密码解锁。`);
+        }
+      }
     })();
     return () => { cancelled = true; };
   }, [refresh, loadQr]);
@@ -380,6 +406,11 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
             + (auth.adminPolicy === 'local_only'
               ? '当前策略为「仅限电脑本机」，请在电脑上用 127.0.0.1 打开本页面。'
               : '请输入管理密码解锁（未单独设置管理密码时，输入访问密码即可）。')),
+          // 本机自动领取令牌失败时说明原因，否则用户只会看到"要输密码"却不知为何
+          adminAutoFetchError
+            ? h('div', { style: { ...S.warn, fontSize: 12, marginBottom: 8 } },
+                `本机自动解锁失败：${adminAutoFetchError}`)
+            : null,
           auth.adminPolicy === 'local_only'
             ? null
             : h('div', { style: S.row },
@@ -663,19 +694,26 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
 
     // 4. 反向代理接入（nginx 子目录 / 监听地址）
     h(Card, { title: '反向代理接入' },
+      // 未解锁时不再禁用控件（禁用 = 点了没反应，用户无法判断是"没权限"还是"坏了"），
+      // 而是保持可编辑、点击后由服务端给出明确拒绝原因。
+      !adminToken
+        ? h('p', { style: { ...S.warn, margin: '0 0 10px' } },
+            '当前未解锁管理员，保存会被拒绝。请在上方输入管理密码解锁'
+            + (adminAutoFetchError ? `（本机自动解锁失败：${adminAutoFetchError}）` : '。'))
+        : null,
       h(Row, { label: '二级目录' },
         h('input', {
           style: S.input,
           placeholder: '留空 = 站点根；填 /dsh 表示 https://域名/dsh/',
           value: basePathVal,
-          disabled: busy || !adminToken,
+          disabled: busy,
           onChange: (e) => setBasePathVal(e.target.value),
         })),
       h(Row, { label: '监听地址' },
         h('select', {
           style: S.input,
           value: hostVal,
-          disabled: busy || !adminToken,
+          disabled: busy,
           onChange: (e) => setHostVal(e.target.value),
         },
           h('option', { value: '0.0.0.0' }, '0.0.0.0 — 局域网可直连（默认）'),
@@ -683,7 +721,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       h(Row, { label: '' },
         h('button', {
           style: S.btnPrimary,
-          disabled: busy || !adminToken,
+          disabled: busy,
           onClick: async () => {
             const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
             if (v) setMsg({ kind: 'ok', text: `已保存：门户挂在 ${v.basePath || '站点根'}，监听 ${v.host}` });

@@ -82,7 +82,7 @@ async function withProxy(opts, fn) {
     targetPort: up.port,
     authManager: auth,
     basePath: opts.basePath ?? '',
-    allowedOrigins: () => ['http://127.0.0.1:3082'],
+    allowedOrigins: () => opts.origins ?? ['http://127.0.0.1:3082'],
   });
   await proxy.start();
   try {
@@ -362,3 +362,69 @@ test('RPC：setProxyConfig 需管理员，且未设密码时拒绝', async () =>
   assert.equal(okRes.ok, true);
   auth.dispose();
 });
+
+// ---- 桌面版（dsh-app://app）必须能领到本机令牌 ----
+
+test('桌面版来源：dsh-app://app 在白名单内时可领到本机令牌（否则管理控件无反应）', async () => {
+  await withProxy(
+    { basePath: '', authConfig: { enabled: true }, origins: ['dsh-app://app'] },
+    async ({ proxy, auth }) => {
+      await auth.setPassword('guest-pass');
+      const res = await rawGetWithOrigin(proxy.listenPort, '/__dsh_porthole__/loopback-token', 'dsh-app://app');
+      assert.equal(res.status, 200, `桌面来源应可领令牌，实际 ${res.status}: ${String(res.body).slice(0, 80)}`);
+      const data = JSON.parse(res.body);
+      assert.equal(data.ok, true);
+      assert.match(data.adminToken, /^[a-f0-9]{48}$/);
+    },
+  );
+});
+
+test('桌面版来源：白名单里有它时，其它未知来源仍被拒', async () => {
+  await withProxy(
+    { basePath: '', authConfig: { enabled: true }, origins: ['dsh-app://app'] },
+    async ({ proxy, auth }) => {
+      await auth.setPassword('guest-pass');
+      const res = await rawGetWithOrigin(proxy.listenPort, '/__dsh_porthole__/loopback-token', 'https://evil.example.com');
+      assert.equal(res.status, 403);
+      assert.doesNotMatch(String(res.body), /adminToken/);
+    },
+  );
+});
+
+test('桌面版来源：opaque 字面量 null 仍被拒绝（不能因为放行桌面协议而开后门）', async () => {
+  await withProxy({ basePath: '', authConfig: { enabled: true } }, async ({ proxy, auth }) => {
+    await auth.setPassword('guest-pass');
+    const res = await rawGetWithOrigin(proxy.listenPort, '/__dsh_porthole__/loopback-token', 'null');
+    assert.equal(res.status, 403);
+    assert.match(res.body, /origin not allowed/);
+  });
+});
+
+/** 带任意 Origin 头发起一次内置端点请求（rawGet 会对 Origin 做一定处理，这里显式构造）。 */
+function rawGetWithOrigin(port, path, origin) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      const lines = [
+        `GET ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        `Origin: ${origin}`,
+        'Connection: close',
+        '',
+        '',
+      ];
+      socket.write(lines.join('\r\n'));
+    });
+    let buf = '';
+    socket.on('data', (c) => { buf += c.toString('utf8'); });
+    socket.on('end', () => {
+      const [head, ...rest] = buf.split('\r\n\r\n');
+      let body = rest.join('\r\n\r\n');
+      if (/transfer-encoding:\s*chunked/i.test(head)) {
+        body = body.replace(/^[0-9a-f]+\r\n/i, '').replace(/\r\n0\r\n\r\n$/, '');
+      }
+      resolve({ status: Number(head.split(' ')[1]), head, body });
+    });
+    socket.on('error', reject);
+    setTimeout(() => { socket.destroy(); resolve({ status: 0, head: buf, body: buf }); }, 2000);
+  });
+}

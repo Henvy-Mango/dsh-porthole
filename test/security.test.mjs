@@ -595,11 +595,19 @@ test('loopback-token：白名单只含本插件自己的面板来源', async () 
   await withProxy(async ({ service }) => {
     const origins = service.allowedOrigins();
     assert.ok(origins.length >= 2, '至少包含回环与局域网两种写法');
+
+    // 唯一合法的非 http(s) 来源：官方桌面版的自定义协议（桌面壳固定 dsh-app://app）
+    assert.ok(origins.includes('dsh-app://app'), '桌面版来源必须在白名单里，否则管理类控件会无反应');
+
     for (const o of origins) {
+      if (o === 'dsh-app://app') continue;
       assert.match(o, /^http:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.)/, `可疑来源：${o}`);
-      assert.notEqual(o, 'null');
-      assert.notEqual(o, '*');
     }
+    // 这两个字面量在任何情况下都不许出现：
+    //   "null" 是 opaque origin 的字符串形式，放行它 = 放行任意 sandboxed iframe
+    //   "*" 不用解释
+    assert.equal(origins.includes('null'), false);
+    assert.equal(origins.includes('*'), false);
   });
 });
 
