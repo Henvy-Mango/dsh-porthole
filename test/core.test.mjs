@@ -1,0 +1,232 @@
+// test/core.test.mjs —— 核心链路：反向代理 / WebSocket / 门禁 / 二级目录
+//
+// 这是插件的存在理由，任何一条坏了都等于不可用：
+//   1. HTTP 原样转发 + 注入 DSH 原生 loopback cookie（不注入则一律 401）
+//   2. WebSocket 升级转发（DSH 实时通道全靠它）
+//   3. 访问门禁：未认证 401、密码登录、扫码令牌直通
+//   4. 二级目录：前缀剥离、严格收敛、对外地址带前缀与尾斜杠
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer, request as httpRequest } from 'node:http';
+import net from 'node:net';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+
+import { LiteProxy, ENDPOINT_PREFIX, loopbackHeaders, sanitizeProxyHeaders } from '../lib/proxy.js';
+import { AuthManager } from '../lib/auth/manager.js';
+
+// ---------- 夹具 ----------
+
+/** 假 DSH：记录收到的头，并提供一个 WS 回显端点。 */
+function startUpstream() {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ url: req.url, headers: req.headers });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<html><body>upstream:${req.url}</body></html>`);
+  });
+  server.on('upgrade', (req, socket) => {
+    const accept = createHash('sha1')
+      .update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest('base64');
+    socket.write(['HTTP/1.1 101 Switching Protocols', 'Upgrade: websocket', 'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${accept}`, '', ''].join('\r\n'));
+    socket.on('error', () => {});
+  });
+  return new Promise((r) => server.listen(0, '127.0.0.1', () => r({ server, seen, port: server.address().port })));
+}
+
+/** 起一个真实代理（可选认证配置与挂载前缀）。 */
+async function withProxy(opts, fn) {
+  const up = await startUpstream();
+  const home = await mkdtemp(join(tmpdir(), 'core-'));
+  await writeFile(join(home, '.credentials.yaml'),
+    `client-connection/browser-session:\n  payload:\n    secret: ${Buffer.alloc(32, 7).toString('base64url')}\n`);
+
+  const prevHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = home;
+  const auth = new AuthManager({ config: opts.authConfig ?? { enabled: false }, sessionsFile: join(home, 's.json') });
+  if (opts.password) await auth.setPassword(opts.password);
+  const proxy = new LiteProxy({
+    listenPort: 0, targetPort: up.port, authManager: auth,
+    basePath: opts.basePath ?? '',
+    allowedOrigins: () => opts.origins ?? ['http://127.0.0.1:3082'],
+  });
+  await proxy.start();
+  try {
+    await fn({ proxy, auth, upstream: up });
+  } finally {
+    await proxy.stop();
+    auth.dispose();
+    up.server.close();
+    if (prevHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHome;
+  }
+}
+
+function get(port, path, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function post(port, path, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = httpRequest({
+      host: '127.0.0.1', port, path, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), ...headers },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+// ---------- 1. 转发 ----------
+
+test('转发：页面原样透传，并注入 loopback cookie + 改写 Host', async () => {
+  await withProxy({}, async ({ proxy, upstream }) => {
+    const res = await get(proxy.listenPort, '/');
+    assert.equal(res.status, 200);
+    assert.match(res.body, /upstream:\//, '响应体必须原样透传，不做 HTML 注入');
+
+    const last = upstream.seen.at(-1);
+    assert.equal(last.headers.host, `127.0.0.1:${upstream.port}`, 'Host 必须改写为回环 authority');
+    assert.match(last.headers.cookie || '', /dsh-auth-/, '必须注入 DSH 原生会话 cookie');
+  });
+});
+
+test('转发：hop-by-hop 头被剔除，Referer 只换 origin 保留路径', () => {
+  const out = sanitizeProxyHeaders({ 'content-type': 'text/html', connection: 'keep-alive', 'transfer-encoding': 'chunked', 'x-keep': '1' });
+  assert.equal(out.connection, undefined);
+  assert.equal(out['transfer-encoding'], undefined);
+  assert.equal(out['x-keep'], '1');
+
+  const { headers } = loopbackHeaders({ host: '192.168.1.5:3082', referer: 'http://192.168.1.5:3082/a?b=1', 'accept-encoding': 'gzip' }, 3080);
+  assert.equal(headers.host, '127.0.0.1:3080');
+  assert.equal(headers.referer, 'http://127.0.0.1:3080/a?b=1');
+  assert.equal(headers['accept-encoding'], undefined);
+});
+
+test('转发：WebSocket 升级成功；未认证时被 401 拒绝', async () => {
+  await withProxy({ password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy, auth }) => {
+    auth.allowLoopback = false; // 模拟远程设备
+    const up = await new Promise((resolve) => {
+      const s = net.connect(proxy.listenPort, '127.0.0.1', () => {
+        s.write(['GET /plugins/events HTTP/1.1', `Host: 127.0.0.1:${proxy.listenPort}`,
+          'Upgrade: websocket', 'Connection: Upgrade', 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version: 13', '', ''].join('\r\n'));
+      });
+      let buf = '';
+      s.on('data', (c) => { buf += c.toString('latin1'); });
+      s.on('error', () => {});
+      setTimeout(() => { s.destroy(); resolve(Number(buf.split(' ')[1])); }, 800);
+    });
+    assert.equal(up, 401, '未认证的 WS 升级必须被拦');
+
+    // 带会话后放行
+    const session = auth.createSession();
+    const ok = await new Promise((resolve) => {
+      const s = net.connect(proxy.listenPort, '127.0.0.1', () => {
+        s.write(['GET /plugins/events HTTP/1.1', `Host: 127.0.0.1:${proxy.listenPort}`,
+          'Upgrade: websocket', 'Connection: Upgrade', 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version: 13', `Cookie: dsh_portal_auth=${session}`, '', ''].join('\r\n'));
+      });
+      let buf = '';
+      s.on('data', (c) => { buf += c.toString('latin1'); });
+      s.on('error', () => {});
+      setTimeout(() => { s.destroy(); resolve(Number(buf.split(' ')[1])); }, 800);
+    });
+    assert.equal(ok, 101, '已认证的 WS 升级应成功');
+  });
+});
+
+// ---------- 2. 门禁 ----------
+
+test('门禁：未认证 401（返回登录页），密码登录后可访问', async () => {
+  await withProxy({ password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy }) => {
+    const denied = await get(proxy.listenPort, '/', { Accept: 'text/html', Host: 'dsh.example.com' });
+    assert.equal(denied.status, 401);
+    assert.match(denied.body, /访问密码|Access password/, '应返回登录页');
+
+    const login = await post(proxy.listenPort, `${ENDPOINT_PREFIX}/login`, { password: 'guest-pass' }, { Host: 'dsh.example.com' });
+    assert.equal(login.status, 200);
+    const cookie = login.headers['set-cookie'][0].split(';')[0];
+
+    const allowed = await get(proxy.listenPort, '/', { cookie, Host: 'dsh.example.com' });
+    assert.equal(allowed.status, 200);
+  });
+});
+
+test('门禁：扫码令牌 302 到干净地址，并把会话写进 Cookie', async () => {
+  await withProxy({ password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy, auth }) => {
+    auth.allowLoopback = false;
+    const res = await get(proxy.listenPort, `/?auth=${encodeURIComponent(auth.secretToken)}`, { Host: 'dsh.example.com' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.location, '/', 'token 必须从地址栏移除');
+    assert.match(res.headers['set-cookie'][0], /dsh_portal_auth=/, '应下发会话 Cookie');
+  });
+});
+
+test('门禁：同机反代（来源=127.0.0.1）也无法借用回环免密', async () => {
+  await withProxy({ password: 'guest-pass', authConfig: { enabled: true } }, async ({ proxy }) => {
+    // nginx 与 porthole 同机时来源恒为 127.0.0.1；靠 Host 判定，域名 Host 不得免密
+    const res = await get(proxy.listenPort, '/', { Accept: 'text/html', Host: 'dsh.example.com' });
+    assert.equal(res.status, 401);
+
+    // 本机 Host 才免密
+    const local = await get(proxy.listenPort, '/', { Host: '127.0.0.1:3082' });
+    assert.equal(local.status, 200);
+  });
+});
+
+// ---------- 3. 二级目录 ----------
+
+test('二级目录：直连 /dsh 与 /dsh/ 可用，前缀被剥掉再转发', async () => {
+  await withProxy({ basePath: '/dsh' }, async ({ proxy }) => {
+    for (const p of ['/dsh', '/dsh/']) {
+      const res = await get(proxy.listenPort, p, { Host: '127.0.0.1' });
+      assert.equal(res.status, 200, `${p} 应可用`);
+      assert.match(res.body, /upstream:\/</, `${p} 应被转发到 DSH 根路径`);
+    }
+    const sub = await get(proxy.listenPort, '/dsh/assets/a.js', { Host: '127.0.0.1' });
+    assert.match(sub.body, /upstream:\/assets\/a\.js/);
+  });
+});
+
+test('二级目录：严格收敛——根路径 302 到前缀，其它未挂载路径 404', async () => {
+  await withProxy({ basePath: '/dsh' }, async ({ proxy }) => {
+    const root = await get(proxy.listenPort, '/', { Host: '127.0.0.1' });
+    assert.equal(root.status, 302);
+    assert.equal(root.headers.location, '/dsh/');
+
+    const other = await get(proxy.listenPort, '/api/session/list', { Host: '127.0.0.1' });
+    assert.equal(other.status, 404);
+  });
+});
+
+test('二级目录：防循环——带标记 Cookie 时根路径放行而非无限跳转', async () => {
+  await withProxy({ basePath: '/dsh' }, async ({ proxy }) => {
+    const again = await get(proxy.listenPort, '/', { Host: '127.0.0.1', Cookie: 'dsh_portal_mount=1' });
+    assert.equal(again.status, 200, 'nginx 若仍在剥前缀，应降级为可访问而不是死循环');
+  });
+});
+
+test('二级目录：内置端点不受严格模式限制（面板要靠它领令牌）', async () => {
+  await withProxy({ basePath: '/dsh', password: 'guest-pass', authConfig: { enabled: true }, origins: ['http://127.0.0.1:3082'] }, async ({ proxy }) => {
+    const res = await get(proxy.listenPort, `${ENDPOINT_PREFIX}/loopback-token`, { Host: `127.0.0.1:${proxy.listenPort}`, Origin: 'http://127.0.0.1:3082' });
+    assert.equal(res.status, 200);
+    assert.match(JSON.parse(res.body).adminToken, /^[a-f0-9]{48}$/);
+  });
+});

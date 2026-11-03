@@ -27,7 +27,6 @@ const ENDPOINT_PREFIX = '/__dsh_porthole__';
 // 与 lib/rpc.js 的端点表保持一致，由 test/unit.test.mjs 的契约用例防漂移
 const EP = {
   getStatus: 'getStatus',
-  setLanIp: 'setLanIp',
   setPort: 'setPort',
   restartProxy: 'restartProxy',
   setProxyConfig: 'setProxyConfig',
@@ -45,6 +44,7 @@ const EP = {
 };
 
 const h = (type, props, ...children) => React.createElement(type, props, ...children);
+
 
 const S = {
   card: {
@@ -157,6 +157,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [adminPasswordNew, setAdminPasswordNew] = React.useState('');
   const [portVal, setPortVal] = React.useState('');
   const [basePathVal, setBasePathVal] = React.useState('');
+  // 卡片内联反馈：面板顶部的全局提示离这张卡片太远，滚动后看不见
+  const [proxyMsg, setProxyMsg] = React.useState(null);
   const [hostVal, setHostVal] = React.useState('0.0.0.0');
 
   // 工作区：已注册列表 + 目录浏览状态
@@ -214,8 +216,12 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       const isDesktopShell = protocol === 'dsh-app:';
       const isLocalHost = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '';
       if ((!isLocalHost && !isDesktopShell) || !s.proxy?.port) return;
-      // 桌面壳的 hostname 是 'app'，不能拿来拼 URL —— 一律显式打回环地址
-      const targetHost = isDesktopShell ? '127.0.0.1' : host;
+      // 领令牌要打到「门户实际监听的地址」：
+      //   - 绑到具体网卡（如 192.168.1.103）时，回环 127.0.0.1 根本没人监听，
+      //     此时只能打该网卡地址（Windows 上绑定具体 IP 不会同时监听回环）；
+      //   - 桌面壳的 hostname 是 'app'，不能拿来拼 URL。
+      const boundHost = s.host && s.host !== '0.0.0.0' ? s.host : null;
+      const targetHost = boundHost || (isDesktopShell ? '127.0.0.1' : host);
       try {
         const resp = await fetch(`http://${targetHost}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
           credentials: 'omit',
@@ -392,6 +398,21 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   }
 
   const { proxy, lan } = status;
+
+  /**
+   * 把用户填的 basePath 翻译成「实际要访问的地址」，让填写结果一眼可验。
+   * 与后端 validateBasePath 的归一化规则保持一致（补前导斜杠、去尾斜杠）。
+   */
+  const previewUrl = (() => {
+    // 基线必须用「主机:端口」而不是 lan.url —— lan.url 现在已经带上生效中的 basePath，
+    // 拿它再拼输入框里的前缀会得到 /dsh/dsh/。
+    const base = `http://${lan.ip || '127.0.0.1'}:${proxy.port}`;
+    let p = String(basePathVal || '').trim();
+    if (!p || p === '/') return `${base}/`;
+    if (!p.startsWith('/')) p = `/${p}`;
+    p = p.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+    return `${base}${p}/`;
+  })();
   const lanUrl = lan.url;
 
   return h('div', null,
@@ -443,7 +464,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       h(Row, { label: '状态' },
         h('span', { style: proxy.running ? S.ok : S.bad },
           proxy.running
-            ? `运行中 · 0.0.0.0:${proxy.port} · ${proxy.activeConnections} 个连接`
+            ? `运行中 · ${status.host || '0.0.0.0'}:${proxy.port} · ${proxy.activeConnections} 个连接`
             : (proxy.error || '未运行')),
         h('button', {
           style: S.btn,
@@ -457,15 +478,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           ? h(Row, { label: '扫码' },
               h('span', { style: S.hint }, '解锁管理员后可生成免密二维码（当前只显示地址）'))
           : null,
-      h(Row, { label: '网卡' },
-        h('select', {
-          style: S.input,
-          value: lan.selectedIp || '',
-          onChange: (e) => void call(EP.setLanIp, { ip: e.target.value || null }),
-        },
-          h('option', { value: '' }, `自动选择（当前 ${lan.ip ?? '无'}）`),
-          ...(lan.interfaces ?? []).map((i) => h('option', { key: i.address, value: i.address },
-            `${i.label} — ${i.address}`)))),
+      // 「网卡」行已移除：它与「监听地址」职责重叠。对外展示的 IP 现在直接跟随监听地址
+      // （绑具体地址就用它；绑 0.0.0.0 时自动挑最佳局域网 IP）。
       h(Row, { label: '端口' },
         h('input', {
           style: S.input,
@@ -478,9 +492,75 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           disabled: busy,
           onClick: () => void call(EP.setPort, { port: Number(portVal) }),
         }, '应用')),
+
+      // ---- 二级目录（挂载前缀）----
+      // 设了前缀即强制生效：只放行该前缀下的路径，未挂载路径一律拒绝（无开关）。
+      h(Row, { label: '二级目录' },
+        h('input', {
+          style: S.input,
+          placeholder: '留空 = 站点根；填 /dsh 表示 http://IP:端口/dsh/',
+          value: basePathVal,
+          disabled: busy,
+          onChange: (e) => setBasePathVal(e.target.value),
+        })),
+      h(Row, { label: '监听地址' },
+        h('select', {
+          style: S.input,
+          value: hostVal,
+          disabled: busy,
+          onChange: (e) => setHostVal(e.target.value),
+        },
+          h('option', { value: '0.0.0.0' }, '0.0.0.0（全部网卡，默认）'),
+          h('option', { value: '127.0.0.1' }, '127.0.0.1（仅本机）'),
+          // 只显示 IP，不堆网卡名：选哪张网卡对用户是噪音，
+          // 真正要回答的问题只有一个——「绑到哪个地址」。
+          ...(lan.interfaces ?? []).map((i) => h('option', { key: i.address, value: i.address }, i.address)),
+          // 已保存但该地址已不存在（换了网络/拔了网线）：保留选项，避免下拉显示空白
+          ...(hostVal && hostVal !== '0.0.0.0' && hostVal !== '127.0.0.1'
+            && !(lan.interfaces ?? []).some((i) => i.address === hostVal)
+            ? [h('option', { key: '__missing__', value: hostVal }, `${hostVal}（当前不可用）`)]
+            : []))),
+      h(Row, { label: '' },
+        h('button', {
+          style: S.btnPrimary,
+          disabled: busy,
+          onClick: async () => {
+            setProxyMsg(null);
+            const v = await call(EP.setProxyConfig, {
+              basePath: basePathVal,
+              host: hostVal,
+            });
+            if (v) {
+              setProxyMsg({
+                kind: 'ok',
+                text: `已保存：挂在 ${v.basePath || '站点根'}，监听 ${v.host}。请用 ${previewUrl} 访问。`,
+              });
+            } else {
+              // call() 把原因写进面板顶部提示；这里复制一份到操作点旁边，
+              // 否则滚动到这一段时看不到任何反馈，只会觉得"点了没反应"。
+              setProxyMsg({ kind: 'bad', text: msg?.text || '保存失败，原因见面板顶部提示' });
+            }
+          },
+        }, '保存挂载设置')),
+      proxyMsg
+        ? h('div', { style: { ...(proxyMsg.kind === 'ok' ? S.ok : S.bad), margin: '0 0 8px', lineHeight: 1.6 } },
+            proxyMsg.text)
+        : null,
+      h('p', { style: { ...S.hint, margin: '0 0 6px' } },
+        '将从此地址访问：', h('span', { style: S.mono }, previewUrl)),
+      h('p', { style: { ...S.warn, margin: '0 0 6px' } },
+        '⚠️ 二级目录是 URL 路径前缀，不是域名：要写 /dsh，不要写 -DSH 或 dsh.example.com。'),
+      h('p', { style: { ...S.hint, margin: '0 0 6px' } },
+        '选 0.0.0.0 时所有地址都能访问；选具体 IP 时只有该地址能访问，访问地址也会跟着变。'),
+      basePathVal.trim()
+        ? h('p', { style: { ...S.warn, margin: '0 0 6px' } },
+            '设定后只允许从该目录访问：根路径会自动跳转到它，其它未挂载路径返回 404。'
+            + '若前面有 nginx，请不要让它再剥前缀（proxy_pass http://127.0.0.1:<端口>; 不带尾斜杠）。')
+        : null,
       h('p', { style: S.hint },
         '同一 Wi-Fi / 局域网下的手机、平板、其它电脑，打开上面的地址即可继续使用这台电脑上的 DSH。'
-        + '扫码只在局域网内有效：路由器不做端口映射，这套地址出不了内网。')),
+        + '扫码只在局域网内有效：路由器不做端口映射，这套地址出不了内网。'
+        + '填错二级目录后当前路径会失效，可用本机 127.0.0.1 打开面板改回。')),
 
     // ---------------- 2. 安全认证 ----------------
     h(Card, { title: '安全认证' },
@@ -692,50 +772,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         '添加后 DSH 会把目录注册为工作区，并创建一个以它为工作目录的会话。'
         + '.ssh / .git 等敏感目录与系统目录已默认屏蔽。')),
 
-    // 4. 反向代理接入（nginx 子目录 / 监听地址）
-    h(Card, { title: '反向代理接入' },
-      // 未解锁时不再禁用控件（禁用 = 点了没反应，用户无法判断是"没权限"还是"坏了"），
-      // 而是保持可编辑、点击后由服务端给出明确拒绝原因。
-      !adminToken
-        ? h('p', { style: { ...S.warn, margin: '0 0 10px' } },
-            '当前未解锁管理员，保存会被拒绝。请在上方输入管理密码解锁'
-            + (adminAutoFetchError ? `（本机自动解锁失败：${adminAutoFetchError}）` : '。'))
-        : null,
-      h(Row, { label: '二级目录' },
-        h('input', {
-          style: S.input,
-          placeholder: '留空 = 站点根；填 /dsh 表示 https://域名/dsh/',
-          value: basePathVal,
-          disabled: busy,
-          onChange: (e) => setBasePathVal(e.target.value),
-        })),
-      h(Row, { label: '监听地址' },
-        h('select', {
-          style: S.input,
-          value: hostVal,
-          disabled: busy,
-          onChange: (e) => setHostVal(e.target.value),
-        },
-          h('option', { value: '0.0.0.0' }, '0.0.0.0 — 局域网可直连（默认）'),
-          h('option', { value: '127.0.0.1' }, '127.0.0.1 — 仅本机/nginx 可连'))),
-      h(Row, { label: '' },
-        h('button', {
-          style: S.btnPrimary,
-          disabled: busy,
-          onClick: async () => {
-            const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
-            if (v) setMsg({ kind: 'ok', text: `已保存：门户挂在 ${v.basePath || '站点根'}，监听 ${v.host}` });
-          },
-        }, '应用并保存')),
-      h('p', { style: { ...S.warn, margin: '4px 0 0' } },
-        '⚠️ 二级目录必须与 nginx 的 location 前缀逐字一致（例如 location /dsh/ 对应 /dsh）。'),
-      h('p', { style: S.hint },
-        '填错后当前访问路径会失效：请改用本机 127.0.0.1 打开面板改回，'
-        + '或编辑 ~/.dsh/dsh-porthole/config.json 里的 basePath 后重启宿主。'
-        + '监听改为 127.0.0.1 后，手机将不能直连，必须走 nginx。'
-        + '完整配置见仓库 docs/nginx.md。')),
-
-    // 5. 自检
+    // 4. 自检
     h(Card, { title: '自检' },
       h(Row, { label: '检查' },
         h('button', {

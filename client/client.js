@@ -38,7 +38,6 @@ var BRIDGE_RPC_CHANNEL = "/dsh-porthole";
 var ENDPOINT_PREFIX = "/__dsh_porthole__";
 var EP = {
   getStatus: "getStatus",
-  setLanIp: "setLanIp",
   setPort: "setPort",
   restartProxy: "restartProxy",
   setProxyConfig: "setProxyConfig",
@@ -149,6 +148,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [adminPasswordNew, setAdminPasswordNew] = React.useState("");
   const [portVal, setPortVal] = React.useState("");
   const [basePathVal, setBasePathVal] = React.useState("");
+  const [proxyMsg, setProxyMsg] = React.useState(null);
   const [hostVal, setHostVal] = React.useState("0.0.0.0");
   const [wsList, setWsList] = React.useState(null);
   const [browse, setBrowse] = React.useState(null);
@@ -191,7 +191,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       const isDesktopShell = protocol === "dsh-app:";
       const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "";
       if (!isLocalHost && !isDesktopShell || !s.proxy?.port) return;
-      const targetHost = isDesktopShell ? "127.0.0.1" : host;
+      const boundHost = s.host && s.host !== "0.0.0.0" ? s.host : null;
+      const targetHost = boundHost || (isDesktopShell ? "127.0.0.1" : host);
       try {
         const resp = await fetch(`http://${targetHost}:${s.proxy.port}${ENDPOINT_PREFIX}/loopback-token`, {
           credentials: "omit"
@@ -362,6 +363,14 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
     );
   }
   const { proxy, lan } = status;
+  const previewUrl = (() => {
+    const base = `http://${lan.ip || "127.0.0.1"}:${proxy.port}`;
+    let p = String(basePathVal || "").trim();
+    if (!p || p === "/") return `${base}/`;
+    if (!p.startsWith("/")) p = `/${p}`;
+    p = p.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+    return `${base}${p}/`;
+  })();
   const lanUrl = lan.url;
   return h(
     "div",
@@ -427,7 +436,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         h(
           "span",
           { style: proxy.running ? S.ok : S.bad },
-          proxy.running ? `\u8FD0\u884C\u4E2D \xB7 0.0.0.0:${proxy.port} \xB7 ${proxy.activeConnections} \u4E2A\u8FDE\u63A5` : proxy.error || "\u672A\u8FD0\u884C"
+          proxy.running ? `\u8FD0\u884C\u4E2D \xB7 ${status.host || "0.0.0.0"}:${proxy.port} \xB7 ${proxy.activeConnections} \u4E2A\u8FDE\u63A5` : proxy.error || "\u672A\u8FD0\u884C"
         ),
         h("button", {
           style: S.btn,
@@ -444,24 +453,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         { label: "\u626B\u7801" },
         h("span", { style: S.hint }, "\u89E3\u9501\u7BA1\u7406\u5458\u540E\u53EF\u751F\u6210\u514D\u5BC6\u4E8C\u7EF4\u7801\uFF08\u5F53\u524D\u53EA\u663E\u793A\u5730\u5740\uFF09")
       ) : null,
-      h(
-        Row,
-        { label: "\u7F51\u5361" },
-        h(
-          "select",
-          {
-            style: S.input,
-            value: lan.selectedIp || "",
-            onChange: (e) => void call(EP.setLanIp, { ip: e.target.value || null })
-          },
-          h("option", { value: "" }, `\u81EA\u52A8\u9009\u62E9\uFF08\u5F53\u524D ${lan.ip ?? "\u65E0"}\uFF09`),
-          ...(lan.interfaces ?? []).map((i) => h(
-            "option",
-            { key: i.address, value: i.address },
-            `${i.label} \u2014 ${i.address}`
-          ))
-        )
-      ),
+      // 「网卡」行已移除：它与「监听地址」职责重叠。对外展示的 IP 现在直接跟随监听地址
+      // （绑具体地址就用它；绑 0.0.0.0 时自动挑最佳局域网 IP）。
       h(
         Row,
         { label: "\u7AEF\u53E3" },
@@ -477,10 +470,89 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           onClick: () => void call(EP.setPort, { port: Number(portVal) })
         }, "\u5E94\u7528")
       ),
+      // ---- 二级目录（挂载前缀）----
+      // 设了前缀即强制生效：只放行该前缀下的路径，未挂载路径一律拒绝（无开关）。
+      h(
+        Row,
+        { label: "\u4E8C\u7EA7\u76EE\u5F55" },
+        h("input", {
+          style: S.input,
+          placeholder: "\u7559\u7A7A = \u7AD9\u70B9\u6839\uFF1B\u586B /dsh \u8868\u793A http://IP:\u7AEF\u53E3/dsh/",
+          value: basePathVal,
+          disabled: busy,
+          onChange: (e) => setBasePathVal(e.target.value)
+        })
+      ),
+      h(
+        Row,
+        { label: "\u76D1\u542C\u5730\u5740" },
+        h(
+          "select",
+          {
+            style: S.input,
+            value: hostVal,
+            disabled: busy,
+            onChange: (e) => setHostVal(e.target.value)
+          },
+          h("option", { value: "0.0.0.0" }, "0.0.0.0\uFF08\u5168\u90E8\u7F51\u5361\uFF0C\u9ED8\u8BA4\uFF09"),
+          h("option", { value: "127.0.0.1" }, "127.0.0.1\uFF08\u4EC5\u672C\u673A\uFF09"),
+          ...(lan.interfaces ?? []).map((i) => h("option", { key: i.address, value: i.address }, i.address)),
+          ...hostVal && hostVal !== "0.0.0.0" && hostVal !== "127.0.0.1" && !(lan.interfaces ?? []).some((i) => i.address === hostVal) ? [h("option", { key: "__missing__", value: hostVal }, `${hostVal}\uFF08\u5F53\u524D\u4E0D\u53EF\u7528\uFF09`)] : []
+        )
+      ),
+      h(
+        Row,
+        { label: "" },
+        h("button", {
+          style: S.btnPrimary,
+          disabled: busy,
+          onClick: async () => {
+            setProxyMsg(null);
+            const v = await call(EP.setProxyConfig, {
+              basePath: basePathVal,
+              host: hostVal
+            });
+            if (v) {
+              setProxyMsg({
+                kind: "ok",
+                text: `\u5DF2\u4FDD\u5B58\uFF1A\u6302\u5728 ${v.basePath || "\u7AD9\u70B9\u6839"}\uFF0C\u76D1\u542C ${v.host}\u3002\u8BF7\u7528 ${previewUrl} \u8BBF\u95EE\u3002`
+              });
+            } else {
+              setProxyMsg({ kind: "bad", text: msg?.text || "\u4FDD\u5B58\u5931\u8D25\uFF0C\u539F\u56E0\u89C1\u9762\u677F\u9876\u90E8\u63D0\u793A" });
+            }
+          }
+        }, "\u4FDD\u5B58\u6302\u8F7D\u8BBE\u7F6E")
+      ),
+      proxyMsg ? h(
+        "div",
+        { style: { ...proxyMsg.kind === "ok" ? S.ok : S.bad, margin: "0 0 8px", lineHeight: 1.6 } },
+        proxyMsg.text
+      ) : null,
+      h(
+        "p",
+        { style: { ...S.hint, margin: "0 0 6px" } },
+        "\u5C06\u4ECE\u6B64\u5730\u5740\u8BBF\u95EE\uFF1A",
+        h("span", { style: S.mono }, previewUrl)
+      ),
+      h(
+        "p",
+        { style: { ...S.warn, margin: "0 0 6px" } },
+        "\u26A0\uFE0F \u4E8C\u7EA7\u76EE\u5F55\u662F URL \u8DEF\u5F84\u524D\u7F00\uFF0C\u4E0D\u662F\u57DF\u540D\uFF1A\u8981\u5199 /dsh\uFF0C\u4E0D\u8981\u5199 -DSH \u6216 dsh.example.com\u3002"
+      ),
+      h(
+        "p",
+        { style: { ...S.hint, margin: "0 0 6px" } },
+        "\u9009 0.0.0.0 \u65F6\u6240\u6709\u5730\u5740\u90FD\u80FD\u8BBF\u95EE\uFF1B\u9009\u5177\u4F53 IP \u65F6\u53EA\u6709\u8BE5\u5730\u5740\u80FD\u8BBF\u95EE\uFF0C\u8BBF\u95EE\u5730\u5740\u4E5F\u4F1A\u8DDF\u7740\u53D8\u3002"
+      ),
+      basePathVal.trim() ? h(
+        "p",
+        { style: { ...S.warn, margin: "0 0 6px" } },
+        "\u8BBE\u5B9A\u540E\u53EA\u5141\u8BB8\u4ECE\u8BE5\u76EE\u5F55\u8BBF\u95EE\uFF1A\u6839\u8DEF\u5F84\u4F1A\u81EA\u52A8\u8DF3\u8F6C\u5230\u5B83\uFF0C\u5176\u5B83\u672A\u6302\u8F7D\u8DEF\u5F84\u8FD4\u56DE 404\u3002\u82E5\u524D\u9762\u6709 nginx\uFF0C\u8BF7\u4E0D\u8981\u8BA9\u5B83\u518D\u5265\u524D\u7F00\uFF08proxy_pass http://127.0.0.1:<\u7AEF\u53E3>; \u4E0D\u5E26\u5C3E\u659C\u6760\uFF09\u3002"
+      ) : null,
       h(
         "p",
         { style: S.hint },
-        "\u540C\u4E00 Wi-Fi / \u5C40\u57DF\u7F51\u4E0B\u7684\u624B\u673A\u3001\u5E73\u677F\u3001\u5176\u5B83\u7535\u8111\uFF0C\u6253\u5F00\u4E0A\u9762\u7684\u5730\u5740\u5373\u53EF\u7EE7\u7EED\u4F7F\u7528\u8FD9\u53F0\u7535\u8111\u4E0A\u7684 DSH\u3002\u626B\u7801\u53EA\u5728\u5C40\u57DF\u7F51\u5185\u6709\u6548\uFF1A\u8DEF\u7531\u5668\u4E0D\u505A\u7AEF\u53E3\u6620\u5C04\uFF0C\u8FD9\u5957\u5730\u5740\u51FA\u4E0D\u4E86\u5185\u7F51\u3002"
+        "\u540C\u4E00 Wi-Fi / \u5C40\u57DF\u7F51\u4E0B\u7684\u624B\u673A\u3001\u5E73\u677F\u3001\u5176\u5B83\u7535\u8111\uFF0C\u6253\u5F00\u4E0A\u9762\u7684\u5730\u5740\u5373\u53EF\u7EE7\u7EED\u4F7F\u7528\u8FD9\u53F0\u7535\u8111\u4E0A\u7684 DSH\u3002\u626B\u7801\u53EA\u5728\u5C40\u57DF\u7F51\u5185\u6709\u6548\uFF1A\u8DEF\u7531\u5668\u4E0D\u505A\u7AEF\u53E3\u6620\u5C04\uFF0C\u8FD9\u5957\u5730\u5740\u51FA\u4E0D\u4E86\u5185\u7F51\u3002\u586B\u9519\u4E8C\u7EA7\u76EE\u5F55\u540E\u5F53\u524D\u8DEF\u5F84\u4F1A\u5931\u6548\uFF0C\u53EF\u7528\u672C\u673A 127.0.0.1 \u6253\u5F00\u9762\u677F\u6539\u56DE\u3002"
       )
     ),
     // ---------------- 2. 安全认证 ----------------
@@ -759,67 +831,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         "\u6DFB\u52A0\u540E DSH \u4F1A\u628A\u76EE\u5F55\u6CE8\u518C\u4E3A\u5DE5\u4F5C\u533A\uFF0C\u5E76\u521B\u5EFA\u4E00\u4E2A\u4EE5\u5B83\u4E3A\u5DE5\u4F5C\u76EE\u5F55\u7684\u4F1A\u8BDD\u3002.ssh / .git \u7B49\u654F\u611F\u76EE\u5F55\u4E0E\u7CFB\u7EDF\u76EE\u5F55\u5DF2\u9ED8\u8BA4\u5C4F\u853D\u3002"
       )
     ),
-    // 4. 反向代理接入（nginx 子目录 / 监听地址）
-    h(
-      Card,
-      { title: "\u53CD\u5411\u4EE3\u7406\u63A5\u5165" },
-      // 未解锁时不再禁用控件（禁用 = 点了没反应，用户无法判断是"没权限"还是"坏了"），
-      // 而是保持可编辑、点击后由服务端给出明确拒绝原因。
-      !adminToken ? h(
-        "p",
-        { style: { ...S.warn, margin: "0 0 10px" } },
-        "\u5F53\u524D\u672A\u89E3\u9501\u7BA1\u7406\u5458\uFF0C\u4FDD\u5B58\u4F1A\u88AB\u62D2\u7EDD\u3002\u8BF7\u5728\u4E0A\u65B9\u8F93\u5165\u7BA1\u7406\u5BC6\u7801\u89E3\u9501" + (adminAutoFetchError ? `\uFF08\u672C\u673A\u81EA\u52A8\u89E3\u9501\u5931\u8D25\uFF1A${adminAutoFetchError}\uFF09` : "\u3002")
-      ) : null,
-      h(
-        Row,
-        { label: "\u4E8C\u7EA7\u76EE\u5F55" },
-        h("input", {
-          style: S.input,
-          placeholder: "\u7559\u7A7A = \u7AD9\u70B9\u6839\uFF1B\u586B /dsh \u8868\u793A https://\u57DF\u540D/dsh/",
-          value: basePathVal,
-          disabled: busy,
-          onChange: (e) => setBasePathVal(e.target.value)
-        })
-      ),
-      h(
-        Row,
-        { label: "\u76D1\u542C\u5730\u5740" },
-        h(
-          "select",
-          {
-            style: S.input,
-            value: hostVal,
-            disabled: busy,
-            onChange: (e) => setHostVal(e.target.value)
-          },
-          h("option", { value: "0.0.0.0" }, "0.0.0.0 \u2014 \u5C40\u57DF\u7F51\u53EF\u76F4\u8FDE\uFF08\u9ED8\u8BA4\uFF09"),
-          h("option", { value: "127.0.0.1" }, "127.0.0.1 \u2014 \u4EC5\u672C\u673A/nginx \u53EF\u8FDE")
-        )
-      ),
-      h(
-        Row,
-        { label: "" },
-        h("button", {
-          style: S.btnPrimary,
-          disabled: busy,
-          onClick: async () => {
-            const v = await call(EP.setProxyConfig, { basePath: basePathVal, host: hostVal });
-            if (v) setMsg({ kind: "ok", text: `\u5DF2\u4FDD\u5B58\uFF1A\u95E8\u6237\u6302\u5728 ${v.basePath || "\u7AD9\u70B9\u6839"}\uFF0C\u76D1\u542C ${v.host}` });
-          }
-        }, "\u5E94\u7528\u5E76\u4FDD\u5B58")
-      ),
-      h(
-        "p",
-        { style: { ...S.warn, margin: "4px 0 0" } },
-        "\u26A0\uFE0F \u4E8C\u7EA7\u76EE\u5F55\u5FC5\u987B\u4E0E nginx \u7684 location \u524D\u7F00\u9010\u5B57\u4E00\u81F4\uFF08\u4F8B\u5982 location /dsh/ \u5BF9\u5E94 /dsh\uFF09\u3002"
-      ),
-      h(
-        "p",
-        { style: S.hint },
-        "\u586B\u9519\u540E\u5F53\u524D\u8BBF\u95EE\u8DEF\u5F84\u4F1A\u5931\u6548\uFF1A\u8BF7\u6539\u7528\u672C\u673A 127.0.0.1 \u6253\u5F00\u9762\u677F\u6539\u56DE\uFF0C\u6216\u7F16\u8F91 ~/.dsh/dsh-porthole/config.json \u91CC\u7684 basePath \u540E\u91CD\u542F\u5BBF\u4E3B\u3002\u76D1\u542C\u6539\u4E3A 127.0.0.1 \u540E\uFF0C\u624B\u673A\u5C06\u4E0D\u80FD\u76F4\u8FDE\uFF0C\u5FC5\u987B\u8D70 nginx\u3002\u5B8C\u6574\u914D\u7F6E\u89C1\u4ED3\u5E93 docs/nginx.md\u3002"
-      )
-    ),
-    // 5. 自检
+    // 4. 自检
     h(
       Card,
       { title: "\u81EA\u68C0" },
