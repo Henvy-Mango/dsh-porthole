@@ -769,7 +769,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
                   }, adding ? '添加中…' : '添加为工作区'))
               : null),
       h('p', { style: S.hint },
-        '添加后 DSH 会把目录注册为工作区，并创建一个以它为工作目录的会话。'
+        '添加后可在工作区中新建对话，对话将以该目录为工作目录。'
         + '.ssh / .git 等敏感目录与系统目录已默认屏蔽。')),
 
     // 4. 自检

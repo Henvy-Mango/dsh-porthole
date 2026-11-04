@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "DSH 本机门户：反向代理 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名/二级目录，可绑定指定网卡。",
-  "releaseNotes": "【v1.4.2】① 保留 Accept-Encoding，让 DSH 自带 gzip 生效：主 bundle 941 KB → 320 KB（省 66%），session/list 56 KB → 16 KB；上游为注入 HTML 会删掉该头，等于关掉压缩，本插件不注入 HTML，无此约束。② 移除 GitHub Actions workflow（push 不再触发检查）。③ 补两条「压缩 × 投影剥离」测试。",
+  "releaseNotes": "【v1.4.3】① 修复设置面板添加工作区后，新建对话报 SessionPersistenceNotFoundError（session-1 not found）：添加工作区只注册目录，会话交给 DSH 原生流程创建并持久化。② 修复开启门禁后 manifest / favicon 因浏览器未携带 Cookie 而返回 401，仅允许指定资源匿名 GET/HEAD，并遵守挂载前缀。③ 新增 3 项回归测试，全部 36 项测试通过。升级后请完整重启 DSH 并刷新页面，清除旧的内存空会话。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

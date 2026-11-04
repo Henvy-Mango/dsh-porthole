@@ -92,6 +92,31 @@ test('工作区：真实注册进 workspaceRegistry，并可按路径排除敏�
   await svc.authManager.dispose();
 });
 
+test('工作区：注册目录时不预建或挂接未持久化的空会话', async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'ws-session-'));
+  const host = fakeHost();
+  const createdSessions = [];
+  const attachedSessions = [];
+  host.sessions.create = () => {
+    const session = { id: `session-${createdSessions.length + 1}` };
+    createdSessions.push(session);
+    return session;
+  };
+  host.workspaceRegistry.get = () => ({
+    async attachSession(id) { attachedSessions.push(id); },
+  });
+  const svc = mkService(host);
+  t.after(() => svc.authManager.dispose());
+
+  const added = await svc.addWorkspace(fixture);
+  assert.equal(added.ok, true);
+  assert.equal(added.registered, true);
+  assert.equal(added.workspaceId, (await svc.getWorkspaces())[0].id);
+  assert.deepEqual(createdSessions, [], '底层 sessions.create 只创建内存会话，后续复用会因无持久化记录而失败');
+  assert.deepEqual(attachedSessions, [], '工作区初始应为空，交给 DSH 原生新建对话流程创建会话');
+  assert.equal(added.sessionId, null, '保留响应字段，但注册目录不再生成会话 ID');
+});
+
 test('工作区：目录浏览可用，敏感目录回退而非报错', async () => {
   const svc = mkService(fakeHost());
   const home = await svc.listRemoteDirectories();

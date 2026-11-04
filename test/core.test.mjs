@@ -65,9 +65,9 @@ async function withProxy(opts, fn) {
   }
 }
 
-function get(port, path, headers = {}) {
+function get(port, path, headers = {}, method = 'GET') {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, headers }, (res) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, headers, method }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
@@ -201,6 +201,44 @@ test('门禁：同机反代（来源=127.0.0.1）也无法借用回环免密', a
     // 本机 Host 才免密
     const local = await get(proxy.listenPort, '/', { Host: '127.0.0.1:3082' });
     assert.equal(local.status, 200);
+  });
+});
+
+test('门禁：PWA manifest 与图标可匿名 GET/HEAD，根路径和二级目录均可用', async () => {
+  for (const basePath of ['', '/dsh']) {
+    await withProxy({ basePath, authConfig: { enabled: true, allowLoopback: false } }, async ({ proxy, upstream }) => {
+      const headers = { Host: 'dsh.example.com', 'X-Forwarded-For': '203.0.113.9' };
+      for (const asset of ['/manifest.webmanifest', '/favicon.svg', '/favicon-dark.svg']) {
+        for (const method of ['GET', 'HEAD']) {
+          const path = `${asset}?v=1`;
+          const res = await get(proxy.listenPort, `${basePath}${path}`, headers, method);
+          assert.equal(res.status, 200, `${method} ${basePath}${path} 不应要求 Cookie`);
+          assert.equal(res.headers['set-cookie'], undefined, '公开资源不得签发访问会话');
+          assert.equal(upstream.seen.at(-1).url, path, '剥前缀后保留资源路径和查询参数');
+          assert.equal(upstream.seen.at(-1).headers['x-forwarded-for'], '203.0.113.9', '不改变转发头策略');
+          if (method === 'GET') assert.match(res.body, /upstream:/, '应返回上游资源而非登录页');
+          else assert.equal(res.body, '', 'HEAD 不得返回响应体');
+        }
+      }
+    });
+  }
+});
+
+test('门禁：PWA 例外不放开页面、API、同名子路径或写请求，并遵守挂载前缀', async () => {
+  await withProxy({ basePath: '/dsh', authConfig: { enabled: true, allowLoopback: false } }, async ({ proxy, upstream }) => {
+    const headers = { Host: 'dsh.example.com' };
+    for (const path of ['/dsh/', '/dsh/api/session/list', '/dsh/git/config', '/dsh/assets/private.svg',
+      '/dsh/manifest.webmanifest/private', '/dsh/manifest.webmanifest/', '/dsh/api/manifest.webmanifest']) {
+      const res = await get(proxy.listenPort, path, headers);
+      assert.equal(res.status, 401, `${path} 仍须认证`);
+    }
+    for (const asset of ['/manifest.webmanifest', '/favicon.svg', '/favicon-dark.svg']) {
+      const write = await post(proxy.listenPort, `/dsh${asset}`, {}, headers);
+      assert.equal(write.status, 401, `POST ${asset} 仍须认证`);
+      const unmounted = await get(proxy.listenPort, asset, headers);
+      assert.equal(unmounted.status, 404, '公开资源也必须带挂载前缀');
+    }
+    assert.equal(upstream.seen.length, 0, '被拒绝的请求不得到达上游');
   });
 });
 

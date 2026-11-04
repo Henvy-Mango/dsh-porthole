@@ -3,7 +3,7 @@
 **定位**：本机 DSH 的**统一入口门户**——局域网直连，或经 frps / EasyTier 等外部打洞链路打进来，
 都落在同一个反代 + 门禁上。不绑定具体传输方式。
 **对比基准**：[wenbin-wb/dsh-bridge](https://github.com/wenbin-wb/dsh-bridge) `main` @ `v2.17.8`（下文称「原版」）
-**本插件版本**：`dsh-porthole@1.4.2`
+**本插件版本**：`dsh-porthole@1.4.3`
 **范围约定**：只保留「网页转发 + 局域网 + 访问安全认证 + 会话投影剥离 + 远程工作区管理（无手机端 UI）」，
 其余能力一律不实现。本报告逐项列出被移除的能力、移除理由、以及**用户实际会感知到的后果**与**替代办法**。
 
@@ -15,6 +15,8 @@
 > **v1.4.0 变更**：① 二级目录改为**强制严格模式**（移除开关，根路径 302、未挂载路径 404，含防循环保护）；
 > ② 新增「监听地址」可绑定任意本机网卡 IP；③ 面板「访问地址」与二维码带上前缀并以 / 结尾；
 > ④ 修复桌面版（dsh-app://app）拿不到管理员令牌导致控件无响应；⑤ 测试精简为 3 个文件 27 个用例。
+> **v1.4.3 变更**：① 添加工作区不再提前创建未持久化的空会话，修复后续新建对话报 `session-1 not found`；
+> ② 指定的 manifest 与图标支持匿名 GET/HEAD，修复门禁开启后的资源 401；③ 全部 36 项测试通过。
 
 
 ---
@@ -34,14 +36,14 @@
 > 外部链路（frps 端口映射、EasyTier 组网、自建反代）只要打到它的监听端口，同样受完整门禁保护。
 > 原版把隧道做进插件（cloudflared 生命周期 + 二进制管理）；porthole 选择让外部工具干这件事。
 
-| 维度 | 原版 dsh-bridge | dsh-porthole（v1.4.2） | 变化 |
+| 维度 | 原版 dsh-bridge | dsh-porthole（v1.4.3） | 变化 |
 | --- | --- | --- | --- |
 | 服务端源码（不含 vendor bundle） | 21 627 行 | 3 394 行 | **−84.3%** |
 | 客户端源码 | 9 979 行 | 693 行 | **−93.1%** |
 | 客户端产物 `client.js` | 512 KB | 30 KB | **−94.0%** |
 | npm 运行时依赖 | `qrcode`, `ws` + 3 个 peer/optional | `qrcode` + 1 个 peer | **−2** |
 | RPC 端点 | 47 | 14 | **−33** |
-| 宿主 inject 服务 | 7 个 | 4 个 | **−3** |
+| 宿主 inject 服务 | 7 个 | 3 个 | **−4** |
 | 对外入口 | 局域网 + Cloudflare + 自建隧道 | 仅局域网 | **−2 类** |
 
 > 行数口径：`find lib -name '*.js' -o -name '*.mjs' | xargs wc -l`，已剔除
@@ -147,7 +149,7 @@
 | --- | --- | --- | --- |
 | 目录浏览（`listRemoteDirectories`：根目录 / 盘符 / 面包屑 / 子目录） | ✅ | ✅ **已迁移** | 敏感目录与不安全符号链接过滤逐字对齐 |
 | 路径安全校验（`path-validator.js`：系统目录、`.ssh` 等黑名单、符号链接逃逸、UNC） | ✅ 195 行 | ✅ **已迁移** | 同一份代码 |
-| 远程添加工作区（`addRemoteWorkspace` → DSH `workspaceRegistry` + 挂会话） | ⚠️ 有 bug | ✅ **已迁移并修好** | 见下方说明 |
+| 远程添加工作区（`addRemoteWorkspace` → DSH `workspaceRegistry`） | ⚠️ 有 bug | ✅ **已迁移并修好** | 见下方说明 |
 | 工作区列表（`listWorkspaces`） | ⚠️ 有 bug | ✅ **已迁移并修好** | 同上 |
 | 面板 UI | 手机抽屉 + 目录 Slot 接管 | ✅ **设置页「工作区」卡片**（本机浏览 / 一键添加） | 按需求**不做手机端**：不接管 `directoryFlow` Slot，手机上「添加工作区」继续走 DSH 原生流程 |
 | 鉴权 | `checkAdminAuth` + `requireConfigured`（浏览 30/min、添加 20/min 限流） | ✅ 同策略 | 未设密码时浏览/添加会被拒并提示先设密码 |
@@ -155,8 +157,9 @@
 **修复的上游 bug**：原版 `BridgeService` 里 `this.ctx` **从未被赋值**——`getWorkspaces()` / `addWorkspace()`
 写的是 `this.ctx?.workspaceRegistry`，实际永远是 `undefined`。也就是说原版的「远程添加工作区」
 只做了路径安全校验就返回 `{ok:true, registered:false}`，**从不真正注册**。porthole 把宿主 ctx 显式
-传入服务（`hostCtx`），实机验证：注册返回 DSH 真实 `workspaceId`（UUID）、创建并挂接了会话、
-`listWorkspaces` 能回读。
+传入服务（`hostCtx`），注册返回 DSH 真实 `workspaceId`（UUID），`listWorkspaces` 能回读。
+添加工作区仅注册目录，会话交给 DSH 原生新建对话流程创建并持久化；提前调用底层
+`sessions.create()` 只会生成内存会话，后续复用时会因缺少持久化记录而失败。
 
 ---
 
@@ -392,4 +395,4 @@ porthole 只依赖 `qrcode`。原版的 `ws`（隧道客户端必需）、`@lark
 **最近一次实测**：v1.2.0 在 DSH 0.2.1-rc.5（桌面版）实机验证通过：代理监听、转发 200、RPC 通道、
 session/list 9/9 会话投影剥离、工作区真实注册（DSH UUID + 会话挂接）与敏感路径拦截、自检五项全绿
 **核对方式**：源码逐文件比对 + `wc -l` 统计 + RPC 端点表 diff（47 → 14）+ 依赖清单 diff
-**porthole 测试状态**：`npm test` → 96/96 通过（代理转发 / WS 升级与鉴权 / 双密码与防篡改锁 / 验证模式 / 应急复位 / loopback-token 三道闸 / connection RPC 兼容垫片 / 会话投影剥离含 gzip 与代理集成 / 工作区注册·浏览·门禁 / 网卡排序 / 登录页 / 客户端真实 React 渲染 / RPC 常量契约）
+**porthole 测试状态**：v1.4.3，`npm test` → 36/36 通过（代理转发 / WS 升级与鉴权 / 双密码与防篡改锁 / 验证模式 / 应急复位 / connection RPC 兼容垫片 / 会话投影剥离含 gzip 与代理集成 / 工作区注册与空会话回归 / 敏感路径拦截 / 登录页与挂载前缀 / PWA 公开资源及门禁边界 / 客户端真实 React 渲染）
