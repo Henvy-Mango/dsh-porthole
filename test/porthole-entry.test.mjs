@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
 import { withProxy, request, websocket, listen } from './helpers/proxy.mjs';
+import { BridgeLiteService } from '../lib/service.js';
 
 const authConfig = { enabled: true, allowLoopback: false };
 const cookieOf = (response) => response.headers['set-cookie'][0];
@@ -83,16 +84,23 @@ test('未登录的页面导航回入口，API、SSE 和写请求返回 JSON 401'
   });
 });
 
-test('实时通道未登录拒绝；登录后 WebSocket 升级、SSE 收到首帧', async () => {
-  await withProxy({ authConfig }, async ({ port, auth, upstream }) => {
+test('实时通道与本机令牌：WS Origin 校验、SSE 首帧、loopback-token 来源限制', async () => {
+  await withProxy({ authConfig, origins: ['http://panel.example.test'] }, async ({ port, auth, upstream }) => {
     const path = '/plugins/events?cursor=7';
+    // 未登录 WS 拒绝
     assert.equal(await websocket(port, path), 401);
-    const headers = { Cookie: `dsh_portal_auth=${auth.createSession()}` };
-    assert.equal(await websocket(port, path, headers), 101);
+    const session = { Cookie: `dsh_portal_auth=${auth.createSession()}` };
+    // 带会话后：陌生 Origin 拒绝；同源（nginx HTTPS）/ 白名单 / 无 Origin 放行
+    assert.equal(await websocket(port, path, { ...session, Origin: 'http://evil.example' }), 403);
+    assert.equal(await websocket(port, path, { ...session, Origin: 'https://portal.example.test' }), 101);
+    assert.equal(await websocket(port, path, { ...session, Origin: 'http://panel.example.test' }), 101);
+    assert.equal(await websocket(port, path, session), 101);
     assert.equal(upstream.seen.at(-1).url, path);
+
+    // 已登录 SSE 及时收到首帧，内部路径只剥一次、query 保留
     const front = await relay(port, '/dsh');
     try {
-      const event = await request(front.port, '/dsh/bsk-observation/events?thumbnails=0', { headers, stream: true });
+      const event = await request(front.port, '/dsh/bsk-observation/events?thumbnails=0', { headers: session, stream: true });
       assert.equal(event.status, 200);
       assert.equal(event.headers['content-type'], 'text/event-stream');
       assert.match(event.body, /data: ready\n\n/);
@@ -100,5 +108,18 @@ test('实时通道未登录拒绝；登录后 WebSocket 升级、SSE 收到首�
     } finally {
       await front.close();
     }
+
+    // loopback-token 只给白名单来源签发
+    const allowed = await request(port, '/__dsh_porthole__/loopback-token', {
+      headers: { Host: '127.0.0.1', Origin: 'http://panel.example.test' },
+    });
+    assert.equal(allowed.status, 200);
+    assert.ok(JSON.parse(allowed.body).adminToken);
+    const denied = await request(port, '/__dsh_porthole__/loopback-token', {
+      headers: { Host: '127.0.0.1', Origin: 'http://evil.example' },
+    });
+    assert.equal(denied.status, 403);
+    // service.allowedOrigins 必须覆盖 localhost + DSH 原生端口（本机免密入口）
+    assert.ok(new BridgeLiteService({ dshPort: 3080, port: 3082 }).allowedOrigins().includes('http://localhost:3080'));
   });
 });

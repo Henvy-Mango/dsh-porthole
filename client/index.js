@@ -43,6 +43,19 @@ const EP = {
   addRemoteWorkspace: 'addRemoteWorkspace',
 };
 
+// 设置导航图标：一副「门户 / 远程入口」的门框 + 信号点，纯内联 SVG，不依赖图标包。
+function PortalIcon({ size = 16 }) {
+  return h('svg', {
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+    'aria-hidden': 'true', focusable: 'false', style: { display: 'block' },
+  },
+    h('path', { d: 'M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z' }),
+    h('path', { d: 'M15 12h6' }),
+    h('path', { d: 'm18 9 3 3-3 3' }),
+    h('path', { d: 'M10 12h.01' }));
+}
+
 const h = (type, props, ...children) => React.createElement(type, props, ...children);
 
 
@@ -521,7 +534,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         '同一 Wi-Fi / 局域网下的手机、平板、其它电脑，打开上面的地址即可继续使用这台电脑上的 DSH。'
         + '扫码只在局域网内有效：路由器不做端口映射，这套地址出不了内网。'
         + '对外路径（如子目录前缀）由前置反向代理声明，无需在此填写。'),
-      // 可信代理白名单（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
+      // 可信前置代理（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
       // 不提供编辑控件——它是 cordis 配置项（trustedProxies），改它需重启宿主。
       h('p', { style: { ...S.hint, margin: '10px 0 0' } },
         '可信前置代理（决定是否采纳 X-Forwarded-Prefix）：',
@@ -768,6 +781,15 @@ function apply(ctx) {
   const rpcCall = (endpoint, payload, signal) =>
     ctx.connection.rpc.call(BRIDGE_RPC_CHANNEL, endpoint, payload, signal);
 
+  ctx.slots.inject('settings.section.icon', () => ctx.slots.register(
+    {
+      name: 'settings.section.icon',
+      id: 'dsh-porthole',
+      order: 10,
+      label: () => '远程访问',
+    },
+    ({ size }) => h(PortalIcon, { size }),
+  ));
   ctx.slots.inject('settings.section', () => ctx.slots.register(
     {
       name: 'settings.section',

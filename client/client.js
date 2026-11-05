@@ -53,6 +53,28 @@ var EP = {
   listRemoteDirectories: "listRemoteDirectories",
   addRemoteWorkspace: "addRemoteWorkspace"
 };
+function PortalIcon({ size = 16 }) {
+  return h(
+    "svg",
+    {
+      width: size,
+      height: size,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true",
+      focusable: "false",
+      style: { display: "block" }
+    },
+    h("path", { d: "M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" }),
+    h("path", { d: "M15 12h6" }),
+    h("path", { d: "m18 9 3 3-3 3" }),
+    h("path", { d: "M10 12h.01" })
+  );
+}
 var h = (type, props, ...children) => React.createElement(type, props, ...children);
 var S = {
   card: {
@@ -510,7 +532,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
         { style: S.hint },
         "\u540C\u4E00 Wi-Fi / \u5C40\u57DF\u7F51\u4E0B\u7684\u624B\u673A\u3001\u5E73\u677F\u3001\u5176\u5B83\u7535\u8111\uFF0C\u6253\u5F00\u4E0A\u9762\u7684\u5730\u5740\u5373\u53EF\u7EE7\u7EED\u4F7F\u7528\u8FD9\u53F0\u7535\u8111\u4E0A\u7684 DSH\u3002\u626B\u7801\u53EA\u5728\u5C40\u57DF\u7F51\u5185\u6709\u6548\uFF1A\u8DEF\u7531\u5668\u4E0D\u505A\u7AEF\u53E3\u6620\u5C04\uFF0C\u8FD9\u5957\u5730\u5740\u51FA\u4E0D\u4E86\u5185\u7F51\u3002\u5BF9\u5916\u8DEF\u5F84\uFF08\u5982\u5B50\u76EE\u5F55\u524D\u7F00\uFF09\u7531\u524D\u7F6E\u53CD\u5411\u4EE3\u7406\u58F0\u660E\uFF0C\u65E0\u9700\u5728\u6B64\u586B\u5199\u3002"
       ),
-      // 可信代理白名单（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
+      // 可信前置代理（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
       // 不提供编辑控件——它是 cordis 配置项（trustedProxies），改它需重启宿主。
       h(
         "p",
@@ -834,6 +856,15 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
 }
 function apply(ctx) {
   const rpcCall = (endpoint, payload, signal) => ctx.connection.rpc.call(BRIDGE_RPC_CHANNEL, endpoint, payload, signal);
+  ctx.slots.inject("settings.section.icon", () => ctx.slots.register(
+    {
+      name: "settings.section.icon",
+      id: "dsh-porthole",
+      order: 10,
+      label: () => "\u8FDC\u7A0B\u8BBF\u95EE"
+    },
+    ({ size }) => h(PortalIcon, { size })
+  ));
   ctx.slots.inject("settings.section", () => ctx.slots.register(
     {
       name: "settings.section",

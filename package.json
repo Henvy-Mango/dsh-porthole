@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "DSH 本机门户：反向代理 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名/二级目录，可绑定指定网卡。",
-  "releaseNotes": "【v1.4.3】① 修复设置面板添加工作区后，新建对话报 SessionPersistenceNotFoundError（session-1 not found）：添加工作区只注册目录，会话交给 DSH 原生流程创建并持久化。② 修复开启门禁后 manifest / favicon 因浏览器未携带 Cookie 而返回 401，仅允许指定资源匿名 GET/HEAD，并遵守挂载前缀。③ 新增 3 项回归测试，全部 36 项测试通过。升级后请完整重启 DSH 并刷新页面，清除旧的内存空会话。",
+  "releaseNotes": "【v1.5.0】重要变更（不向后兼容）：二级目录改为唯一模式——由 nginx 剥前缀并固定上报 X-Forwarded-Prefix，移除 basePath / publicPath 手动挂载与严格收敛逻辑。升级前请把 nginx 改为 proxy_pass http://<porthole地址>:3082/;（带尾斜杠）+ proxy_set_header X-Forwarded-Prefix /dsh;，否则原 basePath 配置将不再生效。新增：固定登录入口（未登录页面导航回应用根，API/SSE/写请求返回 JSON 401）、trustedProxies 精确 socket 对端白名单、WebSocket Origin 白名单（CSWSH 纵深防御）、loopback-token 来源补全 localhost/各网卡的 DSH 原生端口、设置页导航图标。安全：本机免密要求非空回环 Host。测试：12 项核心用例全部通过。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

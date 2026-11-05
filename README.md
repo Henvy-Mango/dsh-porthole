@@ -28,7 +28,7 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 | **二级目录挂载** | 可挂在 `/dsh` 这类前缀下（nginx 子路径）：nginx 剥前缀并固定上报 `X-Forwarded-Prefix`，porthole 始终原样转发内部 `req.url`，只用该头生成对外 `Location` 与 `Cookie Path` |
 | **监听地址可选** | `0.0.0.0`（全部网卡）/ `127.0.0.1`（仅本机）/ 任意本机网卡 IP；展示的 IP 跟随绑定值 |
 | **固定登录入口** | 外部应用根即入口（站点根 `/`、挂载时 `/dsh/`）；仅根 GET/HEAD 未登录返回 401 登录页；深层 HTML 导航 302 回入口；API/SSE/fetch/POST 一律 401 JSON |
-| **访问地址自洽** | 面板顶部地址、复制按钮、二维码统一带前缀且以 `/` 结尾（如 `http://192.168.1.103:3082/dsh/`）；展示真实局域网地址，不从代理头猜公开域名 |
+| **访问地址自洽** | 面板顶部地址、复制按钮、二维码统一使用真实局域网**根地址**并以 `/` 结尾（如 `http://192.168.1.103:3082/`）；外部子目录前缀只由 nginx 声明，不混入直连地址，也不从代理头猜公开域名 |
 | **保留 DSH 压缩** | 转发客户端的 `Accept-Encoding`，让 DSH 自己的 gzip 生效（实测主 bundle 941 KB → 320 KB）；上游为注入 HTML 会删掉该头，等于关掉压缩 |
 | 会话投影剥离 | `session/list` 移除 `contextHeaders` / `contextTimeline`（每会话可达数 MB、无 UI 读取）；支持 gzip，剥离失败一律原样直通 |
 | 多网卡识别 | 物理 Wi-Fi / 有线网卡优先，WSL / VMware / Docker / Hyper-V / Mihomo / Clash 大幅降权 |
@@ -42,7 +42,7 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 
 ## 与原版 dsh-bridge 的差异
 
-对比基准：`wenbin-wb/dsh-bridge` **v2.17.8**（当前最新）。完整清单见 [GAP-REPORT.md](./GAP-REPORT.md)。
+对比基准：`wenbin-wb/dsh-bridge` **v2.17.8**（`main` @ `615286b`，2026-11-03）。完整清单见 [GAP-REPORT.md](./GAP-REPORT.md)。
 
 **原版有、这里没有**（有意不做）
 

@@ -33,7 +33,10 @@ test('客户端构建可注册设置面板，显示访问地址、认证和工�
     load: ({ id, factory }) => { assert.equal(id, 'dsh-porthole'); plugin = factory(() => React); },
   } });
   plugin.apply({
-    slots: { inject: (_, register) => register(), register: (_, component) => { Panel = component; } },
+    slots: {
+      inject: (name, fn) => fn(),
+      register: (def, component) => { if (def.name === 'settings.section') Panel = component; return () => {}; },
+    },
     connection: { rpc: { call: async () => ({ ok: true, value: {} }) } },
   });
   const html = renderToStaticMarkup(React.createElement(Panel, { initialAdminToken: 'test-token', initialStatus: {
@@ -42,6 +45,6 @@ test('客户端构建可注册设置面板，显示访问地址、认证和工�
     lan: { ip: '192.168.1.20', interfaces: [], url: 'http://192.168.1.20:3082/' },
     auth: { enabled: true, mode: 'token_and_password', adminPolicy: 'password_unlock', hasPassword: true },
   } }));
-  for (const text of ['局域网访问', '安全认证', '工作区', '192.168.1.20:3082/', '保存监听设置']) assert.ok(html.includes(text), text);
+  for (const text of ['局域网访问', '安全认证', '工作区', '192.168.1.20:3082/', '保存监听设置', '可信前置代理']) assert.ok(html.includes(text), text);
   assert.ok(!html.includes('二级目录'));
 });

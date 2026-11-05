@@ -16,20 +16,36 @@ dsh-porthole 可以挂在**子域名**下，也可以挂在**二级目录**（�
 
 ## 一、先决条件
 
-无论哪种方式，都建议 **porthole 只监听回环**（同机 nginx），让 nginx 成为唯一入口：
+监听地址取决于 **nginx 是否与 porthole 在同一台机器**：
 
-- 默认监听 `0.0.0.0:3082`（这样局域网设备可以直连，不依赖 nginx）；
-- 一旦前面挂了 nginx 对外暴露，把监听地址收紧：
-  ```yaml
-  - name: 'dsh-porthole'
-    config:
-      host: 127.0.0.1   # 只有 nginx 能连；局域网直连同时失效
-      port: 3082
-  ```
+**同机 nginx（推荐）**：让 porthole 只监听回环，nginx 成为唯一入口：
+
+```yaml
+- name: 'dsh-porthole'
+  config:
+    host: 127.0.0.1   # 只有本机 nginx 能连；局域网直连同时失效
+    port: 3082
+```
 
 > 权衡：`host: 127.0.0.1` 后，手机在局域网内**也**必须走 nginx 域名，
 > 「扫二维码直连局域网 IP」会失效。如果你既想要局域网直连、又想要 nginx 对外，
 > 就保持 `0.0.0.0`，并用防火墙限制 3082 只对可信网段开放。
+
+**异机 nginx**（nginx 与 porthole 不在同一台机器）：必须让 porthole 监听 `0.0.0.0`
+（或至少监听 nginx 能访问到的网卡 IP），并同时做两件事：
+
+1. **防火墙**：3082 只允许 nginx 服务器的 IP 访问，禁止其它来源直连；
+2. **trustedProxies**：把 nginx 服务器的真实出口 IP 写进白名单（见下节），
+   否则它上报的 `X-Forwarded-Prefix` 会被当作不可信而忽略。
+
+```yaml
+- name: 'dsh-porthole'
+  config:
+    host: 0.0.0.0          # 异机 nginx 必须能连进来
+    port: 3082
+    trustedProxies:
+      - '192.168.0.10'     # nginx 服务器的真实 IP（socket 对端），不是客户端 IP、不是 XFF
+```
 
 **必须开启访问认证**。经 nginx 暴露到公网后，未设密码的门户等于把 DSH 交出去：
 
@@ -228,10 +244,14 @@ server {
 - name: 'dsh-porthole'
   config:
     port: 3082
-    host: 0.0.0.0
+    host: 0.0.0.0                 # 异机 nginx 必须能连进来
     trustedProxies:
-      - '192.168.0.10'           # nginx 服务器真实 IP（socket 对端），不是客户端、不是 XFF
+      - '192.168.0.10'            # nginx 服务器真实 IP（socket 对端），不是客户端、不是 XFF
 ```
+
+> 异机部署时请在防火墙上把 3082 限制为**只允许 nginx 的 IP**访问；否则局域网内其它设备
+> 可以绕过 nginx 直连门户。若 porthole 主机本身还有别的网卡，`0.0.0.0` 会监听全部网卡，
+> 防火墙规则要覆盖所有入口。
 
 访问 `https://example.com/dsh/` 即可。
 

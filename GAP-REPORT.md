@@ -1,32 +1,33 @@
 # dsh-porthole 能力差异报告
 
-**定位**：本机 DSH 的**统一入口门户**——局域网直连，或经 frps / EasyTier 等外部打洞链路打进来，
+**定位**：本机 DSH 的**统一入口门户**——局域网直连，或经 frps / EasyTier 等外部链路打进来，
 都落在同一个反代 + 门禁上。不绑定具体传输方式。
-**对比基准**：[wenbin-wb/dsh-bridge](https://github.com/wenbin-wb/dsh-bridge) `main` @ `v2.17.8`（下文称「原版」）
-**本插件版本**：`dsh-porthole@1.4.3`
+**对比基准**：[wenbin-wb/dsh-bridge](https://github.com/wenbin-wb/dsh-bridge) `main` @ `615286b`（2026-11-03，`v2.17.8`，下文称「原版」）
+**本插件版本**：`dsh-porthole@1.5.0`
 **范围约定**：只保留「网页转发 + 局域网 + 访问安全认证 + 会话投影剥离 + 远程工作区管理（无手机端 UI）」，
 其余能力一律不实现。本报告逐项列出被移除的能力、移除理由、以及**用户实际会感知到的后果**与**替代办法**。
 
-> **v1.1.1 变更**：修复 DSH ≥0.1.5 上插件不激活的宿主回归（§4.2）；网卡识别加固。
-> **v1.2.0 变更**：① 按需求迁移 **1.6 会话投影剥离**；② 按需求迁移 **1.4 远程工作区管理**
-> （仅面板 UI，不做手机端 Slot 接管），并顺带修掉上游「`this.ctx` 从未赋值导致工作区从不真正注册」的 bug；
-> ③ **§4.1 polyfill 实测关闭**（当前宿主前端不含 `randomUUID` 调用）；④ 插件更名为 `dsh-porthole`，
-> 以全新插件形态发布（不迁移旧版 `dsh-bridge-lite` 数据）。
-> **v1.4.0 变更**：① 二级目录改为**强制严格模式**（移除开关，根路径 302、未挂载路径 404，含防循环保护）；
-> ② 新增「监听地址」可绑定任意本机网卡 IP；③ 面板「访问地址」与二维码带上前缀并以 / 结尾；
-> ④ 修复桌面版（dsh-app://app）拿不到管理员令牌导致控件无响应；⑤ 测试精简为 3 个文件 27 个用例。
-> **v1.4.3 变更**：① 添加工作区不再提前创建未持久化的空会话，修复后续新建对话报 `session-1 not found`；
-> ② 指定的 manifest 与图标支持匿名 GET/HEAD，修复门禁开启后的资源 401；③ 全部 36 项测试通过。
-
+> **v1.1.1**：修复 DSH ≥0.1.5 上插件不激活的宿主回归（§5.2）；网卡识别加固。
+> **v1.2.0**：迁移会话投影剥离与远程工作区管理（修掉上游 `this.ctx` 未赋值导致工作区从不真正注册的 bug）；
+> §5.1 polyfill 实测关闭；插件更名为 `dsh-porthole`。
+> **v1.4.0**：监听地址可绑定任意本机网卡；面板访问地址与二维码跟随监听地址；
+> 修复桌面版（`dsh-app://app`）拿不到管理员令牌；测试精简。
+> **v1.4.3**：添加工作区不再预建未持久化空会话；指定 PWA 资源支持匿名 GET/HEAD。
+> **v1.5.0**：① **二级目录改为唯一模式**：nginx 剥前缀 + 可信
+> `X-Forwarded-Prefix`，移除 `basePath` / `publicPath` 手动挂载与严格收敛逻辑；
+> ② **固定登录入口**：未登录的页面导航统一落到对外应用根，API/SSE/写请求返回 JSON 401；
+> ③ 新增 `trustedProxies`（精确 socket 对端白名单，仅信任物理连接来源 IP，不看 `X-Forwarded-For`）；
+> ④ 设置页导航图标改为自带内联 SVG；⑤ 补齐 WebSocket Origin 白名单与 `loopback-token` 来源变体；
+> ⑥ 测试保持克制，共 12 个核心用例（修复项并入既有场景断言）。
 
 ---
 
 ## 0. 一句话结论
 
-> **上游状态**：对比基准 `wenbin-wb/dsh-bridge` 的最新 release 仍为 **v2.17.8**（2026-11-02），
-> 与本报告基准一致 —— 上游自我们派生以来没有新增能力，因此下列差异清单仍然有效。
+> **上游状态**：对比基准为 `wenbin-wb/dsh-bridge` 的 `main` 分支 `615286b`（2026-11-03，版本 `v2.17.8`）。
+> 本报告按该提交的源码逐文件核对；上游 release 仍为 `v2.17.8`。
 
-本插件砍掉了原版 **47 个 RPC 端点中的 33 个**、`lib/` 下 **21 627 行源码中的 18 233 行**、
+本插件砍掉了原版 **47 个 RPC 端点中的 33 个**、`lib/` 下 **21 713 行源码中的 17 923 行**、
 以及 `ws` / `@larksuite/*` / `@tencent-connect/*` / `cloudflared` 二进制等全部外部依赖。
 省下的是**内置的隧道实现**、**IM 直达通道**、**手机端交互优化**与**运维面板**；
 留下的是「给本机 DSH 开一扇门户」这一条主链路——局域网直连，或由 frps / EasyTier 等外部链路打进来，
@@ -36,20 +37,21 @@
 > 外部链路（frps 端口映射、EasyTier 组网、自建反代）只要打到它的监听端口，同样受完整门禁保护。
 > 原版把隧道做进插件（cloudflared 生命周期 + 二进制管理）；porthole 选择让外部工具干这件事。
 
-| 维度 | 原版 dsh-bridge | dsh-porthole（v1.4.3） | 变化 |
+| 维度 | 原版 dsh-bridge（615286b / v2.17.8） | dsh-porthole（1.5.0） | 变化 |
 | --- | --- | --- | --- |
-| 服务端源码（不含 vendor bundle） | 21 627 行 | 3 394 行 | **−84.3%** |
-| 客户端源码 | 9 979 行 | 693 行 | **−93.1%** |
-| 客户端产物 `client.js` | 512 KB | 30 KB | **−94.0%** |
-| npm 运行时依赖 | `qrcode`, `ws` + 3 个 peer/optional | `qrcode` + 1 个 peer | **−2** |
+| 服务端源码（不含 vendored bundle） | 21 713 行 | 3 790 行 | **−82.5%** |
+| 客户端源码（不含产物） | 10 022 行 | 848 行 | **−91.5%** |
+| 客户端产物 `client.js` | 500 KB | 35 KB | **−93.0%** |
+| 运行时依赖 | `qrcode`, `ws` | `qrcode` | **−1** |
 | RPC 端点 | 47 | 14 | **−33** |
 | 宿主 inject 服务 | 7 个 | 3 个 | **−4** |
-| 对外入口 | 局域网 + Cloudflare + 自建隧道 | 仅局域网 | **−2 类** |
+| 对外入口 | 局域网 + Cloudflare + 自建隧道 | 仅局域网 / 外部反代 | **−2 类** |
+| 测试 | 72 个测试文件 / 约 889 个用例 + 12 个浏览器脚本 | 4 个文件 / 12 个核心用例 | 精简 |
 
 > 行数口径：`find lib -name '*.js' -o -name '*.mjs' | xargs wc -l`，已剔除
 > `lib/feishu/lark-bundled.mjs`（131 929 行）与 `lib/qq/qqbot-bundled.mjs`（8 255 行）两个第三方 vendored 产物。
 > porthole 侧含沿用上游的 `sse-keepalive.js` / `dsh-native-cookie.js` / `compat.js` / `rate-limiter.js` /
-> `session-strip.js` / `connection-compat.js`。
+> `session-strip.js` / `connection-compat.js`，以及新增的 `security/proxy-prefix.js`。
 
 ---
 
@@ -60,7 +62,7 @@
 | 能力 | 原版实现 | porthole |
 | --- | --- | --- |
 | Cloudflare 临时隧道（免登录随机域名） | `lib/cloudflared-manager.mjs`（1266 行）+ 下载/校验/拉起 cloudflared 二进制 | ❌ 无 |
-| Cloudflare Token 固定域名 + 随 DSH 自启 | 同上 + `cloudflared-network-args.js`（协议/边缘 IP/区域白名单） | ❌ 无 |
+| Cloudflare Token 固定域名 + 随 DSH 自启 | 同上 + `cloudflared-network-args.js`（协议/边缘 IP/区域白名单）+ `cloudflared-process-scan.js` | ❌ 无 |
 | 自建 WebSocket 反向隧道 | `lib/tunnel-client.mjs`（537 行）+ `scripts/install-tunnel-server.sh` | ❌ 无 |
 | 外部隧道登记（用户自己 Docker 部署） | `saveExternalTunnel` + 地址归一化 + 二维码 | ❌ 无 |
 | 隧道可观测性（DNS/TLS/边缘/回源端到端探测、疑似 DNS 污染标注、二进制画像、同 Token 冲突检测） | `getStatus().cloudflared.dataPlane/binary/foreignRunner` | ❌ 无 |
@@ -78,8 +80,7 @@
    外部直连 DSH 端口会遇到 origin 校验问题；**porthole 的代理层会做 Host/Origin/Referer 改写**，
    所以更现实的姿势是：端口映射到 **porthole 的 3082**，再配一层反代终止 TLS。
 2. 用 Tailscale / ZeroTier 组虚拟局域网 —— 但这两类网卡在 porthole 的网卡排序里被判为虚拟网卡**降权 200 分**，
-   面板默认不会选它；需要在「网卡」下拉里**手动选中** Tailscale 的 `100.x` 地址。
-   （原版也有同样的降权逻辑，但原版可以直接开隧道绕开这个问题。）
+   面板默认不会选它；需要在「监听地址」下拉里**手动选中** Tailscale 的 `100.x` 地址。
 3. 自建 frp / nps 等通用隧道指向 porthole 端口 —— 可以工作，但没有原版那种「一键 + 自启 + 状态可视化」。
 
 ---
@@ -90,7 +91,7 @@
 | --- | --- | --- |
 | 微信 Bot（ClawBot / iLink，扫码登录、媒体收发、消息分片） | `lib/wechat/*` ≈ 1950 行 | ❌ 无 |
 | QQ Bot（官方 `@tencent-connect/qqbot-nodejs` SDK，长连接/RESUME/富媒体/C2C 流式） | `lib/qq/*` ≈ 2900 行 + 8255 行 vendored bundle | ❌ 无 |
-| 飞书 Bot（官方 Channel SDK，扫码一键建应用、12 条斜杠指令、云文档评论 @、卡片审批原地更新） | `lib/feishu/*` ≈ 2500 行 + 131 929 行 vendored bundle | ❌ 无 |
+| 飞书 Bot（官方 Channel SDK，扫码一键建应用、12 条斜杠指令、云文档评论 @、卡片审批原地更新） | `lib/feishu/*` ≈ 2500 行 + 131929 行 vendored bundle | ❌ 无 |
 | Telegram Bot（Long Polling + 代理） | `lib/telegram/*` ≈ 1300 行 | ❌ 无 |
 | 统一平台编排（多工作区调度、会话持久化、流式输出、审批/问答卡片、文件双向传输、本轮改动摘要 `/diff`） | `lib/platform/*` ≈ 4900 行 | ❌ 无 |
 | 多账号矩阵（同平台多实例、运行时增删、`instanceId` 契约） | `lib/platform/instances.js` + `account-ops.js` ≈ 700 行 | ❌ 无 |
@@ -119,11 +120,11 @@
 | 移动端样式层（顶栏、抽屉、输入框折叠、iOS 键盘适配、防重叠工具栏） | `client/mobile-styles.js` 1299 行 + `client/mobile-yield.js` 219 行 | ❌ 无 |
 | 宿主 CSS-module 类名运行时解析 + 变化监听（跨 DSH 版本兼容） | `client/host-families.js` 442 行 | ❌ 无 |
 | 设置页窄屏两级钻取（≤480px 列表/详情切换） | `client/index.js` CSS 6.2 块 | ❌ 无 |
-| 设置页导航图标替换 | `client/settings-nav-icon.js` 105 行 | ❌ 无 |
-| PWA Manifest / 图标 / `apple-mobile-web-app-*` / 独立全屏 App | 服务端 HTML 注入 `manifest.webmanifest` + `pwa-icon.svg` | ❌ 无 |
+| 设置页导航图标替换 | `client/settings-nav-icon.js` 105 行 | ⚠️ **仅自带一个内联 SVG 图标**（`PortalIcon`，门框 + 指向箭头），不做宿主图标族适配 |
+| PWA Manifest / 图标 / `apple-mobile-web-app-*` / 独立全屏 App（插件自己生成） | 服务端生成 `manifest.webmanifest` + `pwa-icon.svg` + HTML 注入 | ❌ 无（改为**匿名放行 DSH 自带的** `/manifest.webmanifest`、`/favicon.svg`、`/favicon-dark.svg`，不注入、不生成） |
 | 浏览器 polyfill 注入（`crypto.randomUUID`、`AbortSignal.any`、`Promise.iterator`） | HTML `<head>` 注入 3 段脚本 | ❌ 无 |
 | viewport / overscroll / theme-color 注入 | `HTML_HEAD_ASSETS` | ❌ 无 |
-| 主题令牌注入（深色模式告警面/边框） | `client/theme-tokens.js` | ❌ 无 |
+| 主题令牌注入（深色模式告警面/边框） | `client/theme-tokens.js` 49 行 | ❌ 无 |
 | 页面改写层总开关（`mobileUi` / `DSH_BRIDGE_MOBILE_UI` / 面板开关三层） | `resolveMobileUiEnabled` + `uiGetFlags/uiUpdateConfig` | ❌ 无 |
 
 **你会感知到什么**
@@ -133,10 +134,12 @@
 - 手机上打开会是**桌面布局**：右侧栏不会自动全屏、工具栏可能重叠、输入框不会随键盘收起。
   原版把这些都改写了，porthole 完全不做 —— 这是**有意为之**：页面 HTML 一律原样透传，
   代理层只在 `session/list` 这一个 JSON 端点上做投影剥离（§1.6），从不改写页面结构与样式。
-- **不能「添加到主屏幕」当独立 App 用**：没有 manifest，加进去就是个普通网页书签。
+- **不能「添加到主屏幕」当独立 App 用**：原版会生成自己的 manifest 让手机装成 PWA；
+  porthole 只保证 DSH 自带的那份 manifest 不被门禁挡掉（见 §1.7「PWA 公开资源」），
+  加进主屏幕仍是普通网页书签。
 - 老旧 iOS Safari / 微信内置 WebView 里，如果 DSH 依赖 `crypto.randomUUID`，
   在 **HTTP（非 HTTPS）局域网地址**下会缺失 —— 原版注入 polyfill 兜住了，porthole 没有。
-  **这是 porthole 已知的功能性缺陷**，见 §4.1。
+  **这是 porthole 已知的功能性缺陷**，见 §5.1。
 
 **替代办法**：用桌面浏览器开（porthole 本来就是为「同网段的第二块屏幕」设计的）；
 或者保留原版并设 `mobileUi: true`。
@@ -148,7 +151,7 @@
 | 能力 | 原版 | porthole | 说明 |
 | --- | --- | --- | --- |
 | 目录浏览（`listRemoteDirectories`：根目录 / 盘符 / 面包屑 / 子目录） | ✅ | ✅ **已迁移** | 敏感目录与不安全符号链接过滤逐字对齐 |
-| 路径安全校验（`path-validator.js`：系统目录、`.ssh` 等黑名单、符号链接逃逸、UNC） | ✅ 195 行 | ✅ **已迁移** | 同一份代码 |
+| 路径安全校验（`path-validator.js`：系统目录、`.ssh` 等黑名单、符号链接逃逸、UNC） | ✅ 195 行 | ✅ **已迁移**（209 行） | 同一份逻辑 + macOS `/private` 临时目录修正 |
 | 远程添加工作区（`addRemoteWorkspace` → DSH `workspaceRegistry`） | ⚠️ 有 bug | ✅ **已迁移并修好** | 见下方说明 |
 | 工作区列表（`listWorkspaces`） | ⚠️ 有 bug | ✅ **已迁移并修好** | 同上 |
 | 面板 UI | 手机抽屉 + 目录 Slot 接管 | ✅ **设置页「工作区」卡片**（本机浏览 / 一键添加） | 按需求**不做手机端**：不接管 `directoryFlow` Slot，手机上「添加工作区」继续走 DSH 原生流程 |
@@ -177,6 +180,7 @@
 | 配置备份导出 / 导入恢复 | `exportBackup` / `importBackup` | ❌ 无 |
 | 桌面宿主识别（Electron / desktop-host，避免重启拉出孤儿进程） | `isDesktopHost` / `currentProfileName` | ❌ 无（因为不再重启宿主） |
 | 首次启用引导（门禁未开时的提示卡） | `firstRunGuide` + `dismissFirstRunGuide` | ⚠️ **降级保留**（面板常驻风险提示，无一次性引导） |
+| 诊断日志落盘（`~/.dsh/dsh-bridge/diagnostics.log`） | `security/diagnostics-log.js` | ❌ 无（只用宿主 logger） |
 
 **你会感知到什么**：装了 porthole 之后，**每次改插件配置都得手动重启 `dsh web`** ——
 porthole 面板里只有「重启代理」（重启自己的 3082 监听），不会重启 DSH 宿主。
@@ -188,9 +192,11 @@ porthole 面板里只有「重启代理」（重启自己的 3082 监听），�
 
 | 能力 | 原版 | porthole | 说明 |
 | --- | --- | --- | --- |
-| 会话投影剥离（`session/list` 等端点移除 `contextHeaders` / `contextTimeline`） | `lib/session-strip.js` 100 行 | ✅ **已迁移**（同一份代码） | 剥离后实测传输体积降一个量级 |
-| gzip 响应解压后剥离再回写 | ✅ | ✅ **已迁移** | DSH 默认开 gzip，不解压就会静默跳过剥离 |
+| 会话投影剥离（`session/list` 等端点移除 `contextHeaders` / `contextTimeline`） | `lib/session-strip.js` 100 行 | ✅ **已迁移**（文件逐字节相同） | 剥离后实测传输体积降一个量级 |
+| gzip 响应解压后剥离再回写 | ✅ `gunzipSync` | ✅ **已迁移（同一份代码）** | DSH 默认开 gzip，不解压就会静默跳过剥离 |
+| 剥离后是否重新压缩 | ❌ **不重新压缩**：删 `content-encoding`，发明文，重算 `content-length` | ❌ **同样不重新压缩** | 两边策略一致；成本是命中端点走明文传输 |
 | 命中失败时原样返回（绝不破坏响应） | ✅ | ✅ **已迁移** | 非 200 / 解析失败 / 结构不符一律直通 |
+| HTML 页面注入（PWA / polyfill / 移动端） | ✅ 与 session 剥离共用缓冲分支 | ❌ 无 | porthole 不缓冲 HTML |
 
 **实机验证（DSH 0.2.1-rc.5）**：经代理 POST `/api/session/list`（envelope 形如
 `{args:{_request:{}}}`），返回的 9 个真实会话**全部已剥离** `contextHeaders` /
@@ -205,11 +211,9 @@ porthole 面板里只有「重启代理」（重启自己的 3082 监听），�
 
 ### 1.7 安全体系 —— **已完整迁移（v1.1.0）**
 
-原先这一节整节都是「无」，按用户要求已把认证体系整套搬过来。现在只剩三项因定位原因不适用：
-
 | 能力 | 原版 | porthole | 说明 |
 | --- | --- | --- | --- |
-| 访问密码（访客） | ✅ PBKDF2 600k + 失败封禁 | ✅ **一致** | 哈希格式完全相同 |
+| 访问密码（访客） | ✅ PBKDF2-SHA256 600k 迭代 + 失败封禁 | ✅ **一致** | 哈希格式完全相同，可互相搬 config |
 | 独立**管理员密码** | ✅ | ✅ **已迁移** | 未设时回退校验访客密码 |
 | 后台防篡改锁 `adminPolicy`（`password_unlock` / `local_only` / `open`） | ✅ | ✅ **已迁移** | 三态语义逐字对齐 |
 | 管理保护独立开关 `adminProtection` | ✅ | ✅ **已迁移** | 与访问认证解耦 |
@@ -218,15 +222,19 @@ porthole 面板里只有「重启代理」（重启自己的 3082 监听），�
 | `loopback-token` 端点（本机免密领 adminToken） | ✅ CORS 收敛到来源白名单 | ✅ **已迁移** | 额外加了「Host 必须是回环」一道闸 |
 | `reset-auth` 应急复位文件 | ✅ | ✅ **已迁移** | 一次性，复位后自动删除标记 |
 | 令牌脱敏（`getStatus({masked})` / `getRawSecretToken`） | ✅ | ✅ **已迁移** | 非管理员只看到前缀 + `***` |
+| PWA 公开资源匿名读取 | ✅ 插件自己生成 manifest / 图标并匿名返回 | ✅ **已迁移（另一形态）** | 不放行插件自产资源，而是精确放行 DSH 自带的 `manifest.webmanifest` / `favicon.svg` / `favicon-dark.svg` 的 GET/HEAD |
 | 高危操作 `requireConfigured` 拒绝 | ✅ | ✅ 机制已实现 | 但 porthole 没有隧道/备份这类极高危操作，实际未触发 |
+| 登录页模式提示（password_only / token_only / open 的专门文案） | ✅ 516 行登录模板，含 `noPasswordConfigured` 与三种模式提示 | ⚠️ **简化**（143 行） | porthole 登录页只有密码输入 + 封禁提示；`token_only` 模式仍显示密码框，提交后才报错 |
 | 访问范围 `scope`（`all` / `lan_only` / `public_only`） | ✅ | ❌ **不适用** | porthole 只有局域网一种入口，没有可区分的对象 |
 | 内部隧道密钥 `internalTunnelSecret` | ✅ | ❌ **不适用** | 没有隧道，无需辨别隧道转发流量 |
-| 日志注入净化 / 敏感路径校验 | ✅ | ❌ 无 | `log-sanitize.js` 50 行、`path-validator.js` 195 行；porthole 不做目录浏览、不拼用户输入进日志 |
+| 日志注入净化（`log-sanitize.js`） | ✅ | ❌ 无 | porthole 不把用户输入拼进日志 |
+| 敏感路径校验（`path-validator.js`） | ✅ 195 行 | ✅ **已迁移** | 用于工作区目录浏览/添加（见 §1.4） |
 
 **比原版更强的一点**：`loopback-token` 除了原有的「remoteAddress 必须是回环」+「Origin 白名单」，
 porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 明确只有局域网一种入口，
 任何反向代理转发进来时 `remoteAddress` 同样是回环 —— 但 `Host` 会是外部域名。
 不加这道闸，一个挂在同机上的反向代理就能替外部请求领走 adminToken。
+原版的 `verifyRequest` 里 `host === ''` 也放行（见 §4.5），porthole 明确要求非空回环 Host。
 
 **迁移时修掉的一个死锁**（上游也有，porthole 必须处理得更稳）：
 用户先设访客密码，`hasAnyPassword` 立刻为真 → 再设管理密码就被「需要管理员」拦下 →
@@ -240,10 +248,10 @@ porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 
 
 | 能力 | 原版 | porthole |
 | --- | --- | --- |
-| connection RPC 注册回归兜底（DSH ≥ 0.1.5-alpha.1 的 `without inject` 报错） | `connection-compat.js` 115 行，`internal/get` 瀑布事件临时挂兜底 | ❌ **无 —— 已知风险，见 §4.2** |
-| 宿主类名运行时解析（跨 DSH CSS-module 版本） | `host-families.js` | ❌ 无（不注入样式，自然不需要） |
-| `AbortSignal.any` / `Promise.iterator` 服务端垫片 | `compat.js` 172 行 | ✅ **保留**（DSH 核心链每次 agent 请求都调用，缺了会 `(internal)`） |
-| 浏览器侧 `crypto.randomUUID` 等 polyfill | HTML 注入 | ❌ **无 —— 见 §4.1** |
+| connection RPC 注册回归兜底（DSH ≥ 0.1.5-alpha.1 的 `without inject` 报错） | `connection-compat.js` 115 行，`internal/get` 瀑布事件临时挂兜底 | ✅ **已迁移**（105 行，逻辑等价；porthole 省掉了未使用的 `rpcOptions` 参数） |
+| 宿主类名运行时解析（跨 DSH CSS-module 版本） | `client/host-families.js` 442 行 | ❌ 无（不注入样式，自然不需要） |
+| `AbortSignal.any` / `Promise.iterator` 服务端垫片 | `compat.js` 172 行 | ✅ **逐字节相同** |
+| 浏览器侧 `crypto.randomUUID` 等 polyfill | HTML 注入 | ❌ **无 —— 见 §5.1** |
 | 资源 URL 兼容（`resource-url-compat.js`） | 90 行 | ❌ 无 |
 
 ---
@@ -252,10 +260,10 @@ porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 
 
 | 项目 | 原版 | porthole |
 | --- | --- | --- |
-| 单元/集成测试 | `test/` 下 100 个 `.test.mjs` | 71 个用例（5 个文件） |
+| 单元/集成测试 | 72 个 `.test.mjs`，约 889 个用例 | 12 个核心用例（4 个文件） |
 | 浏览器端 UI 验收（puppeteer-core） | `test/browser/` 12 个脚本 + `run-all.mjs` | ❌ 无 |
 | ESLint 配置 + CodeQL / dependabot / release workflow | 有 | ❌ 无 |
-| 中英文完整文档（README 双语 66 KB + `docs/` 20 篇） | 有 | 单页 README + 本报告 |
+| 中英文完整文档（README 双语 + `docs/` 20 篇） | 有 | 单页 README + 本报告 + `docs/nginx.md` |
 | i18n（`locale/zh.json` / `locale/en.json` + 面板逐条翻译 + 运行时按 `<html lang>` 切换） | `client/locales.mjs` 241 行 + `panel-locales.mjs` 719 行 + 校验测试 | ❌ 中文硬编码（登录页仍按 `Accept-Language` 双语） |
 | 发布流水线（GitHub Release / npm 打包 / banner 生成） | `scripts/` + `.github/workflows` | ❌ 无 |
 | `llms.txt`（给 AI 的摘要） | 有 | ❌ 无 |
@@ -268,11 +276,12 @@ porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 
 | --- | --- | --- | --- |
 | **网络诊断** | `diagnoseNetwork`：多目标连通性探测 | `diagnose`：5 项自检（上游 DSH / 代理端口 / 局域网地址 / 回环凭据 / 门禁） | porthole 只查「自己这条链路通不通」，不查外网、不查 DNS、不查隧道 |
 | **网卡识别 / 监听地址** | 多网卡枚举，面板可手选「展示用 IP」 | ✅ **更强**：① 识别代理 TUN 适配器（Mihomo / Clash / sing-box / wintun）与 RFC 2544 段 `198.18.0.0/15`；② 面板「监听地址」可直接绑定任一网卡 IP，展示地址随之变化 —— 原版只能固定 `0.0.0.0` 且会把 `Mihomo 198.18.0.1` 当物理网卡（实测本机） |
-| **二维码** | 局域网 / Cloudflare / 自建隧道 / 外部隧道四套二维码 + LRU 缓存 | 仅局域网二维码；无缓存（每次现算，320px dataURL） | 少三套；性能可忽略 |
-| **SSE 保活** | `sse-keepalive.js`，25 s 阈值，3 条护栏 | ✅ **完整保留**（同一份代码） | 无差异。虽然局域网极少空闲回收，但成本只有每 25 s 12 字节 |
-| **访问密码** | PBKDF2 600k + 旧哈希透明升级 | ✅ **完整保留** | 无差异 |
+| **二维码** | 局域网 / Cloudflare / 自建隧道 / 外部隧道四套二维码 + LRU 缓存 | 仅局域网二维码；无缓存（每次现算，320px dataURL） | 少三套；性能可忽略；二维码始终是 LAN 根地址，不体现反代前缀 |
+| **SSE 保活** | `sse-keepalive.js`，25 s 阈值，3 条护栏 | ✅ **逐字节相同** | 无差异。虽然局域网极少空闲回收，但成本只有每 25 s 12 字节 |
+| **访问密码** | PBKDF2-SHA256 600k 迭代 + 旧哈希透明升级 | ✅ **完整保留** | 无差异 |
 | **登录会话持久化** | `sessions.json` 0600，跨宿主重启恢复 | ✅ **保留**（同机制，独立文件） | 无差异 |
 | **失败封禁** | 5 次失败锁 60 s | ✅ **保留** | 无差异 |
+| **登录页** | 516 行，含模式提示与「尚未设置密码」警示 | 143 行，纯密码框 + 封禁提示 | 见 §1.7；功能可用但提示较少 |
 | **首次启用引导** | 一次性弹窗 + `wizard.guideShown` 持久化 | 面板内**常驻**一行风险提示，无一次性引导 | porthole 更简单也更聒噪；不会「确认过就不再提醒」 |
 | **配置持久化** | `config.json` 0600 + 互斥队列 | ✅ **保留**（同机制，`~/.dsh/dsh-porthole/config.json`） | 目录不同，不冲突 |
 
@@ -282,7 +291,7 @@ porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 
 
 | 能力 | 说明 |
 | --- | --- |
-| **HTTP 反向代理** | 页面 / API / 静态资源全量透传，不缓冲、不改写响应体 |
+| **HTTP 反向代理** | 页面 / API / 静态资源全量透传；除 `session/list` 投影剥离外不缓冲、不改写响应体 |
 | **WebSocket 转发** | `/plugins/events` 等实时通道；101 响应只放行 5 个白名单头，防止上游注入 `set-cookie` |
 | **loopback cookie 注入** | 按 DSH 格式现签 HMAC 会话 cookie；同时注入「含端口」与「忽略端口」两种名称口径（兼容被本地补丁改过的宿主）；注入前按名剔除浏览器残留同名旧值（宿主「同名取第一个」会读到旧值 → 永久 401） |
 | **Host / Origin / Referer 改写** | 让 DSH 的回环来源校验放行；Referer 只替换 origin，保留路径与查询 |
@@ -290,13 +299,88 @@ porthole 还要求 `Host` 头是 `127.0.0.1` / `localhost`。原因是 porthole 
 | **上游 socket error 监听** | 缺了会让一次 RST 变成未捕获异常直接打死 dsh 进程（原版 issue #81 的教训，已继承） |
 | **多网卡智能排序** | 私有网段加分、物理网卡 +100、无线再 +50、虚拟网卡 −200 |
 | **HTTP + WS 双通道鉴权** | 同一个 `verifyRequest` 覆盖两种协议；URL token 直通后 302 到干净 URL |
-| **登录页** | 纯内联、零外链、< 8 KB、中英双语（`Accept-Language`） |
+| **登录页** | 纯内联、零外链、约 3.3 KB、中英双语（`Accept-Language`） |
 
 ---
 
-## 4. 已知风险与缺陷
+## 4. porthole 独有能力（原版没有或做不到）
 
-### 4.1 【低·当前宿主非必需】HTTP 局域网地址下缺少浏览器 polyfill
+### 4.1 二级目录：nginx 剥前缀 + 可信 `X-Forwarded-Prefix` —— **porthole 独有**
+
+原版**完全没有挂载前缀能力**：没有 `basePath` / `publicPath` 配置，登录页写死
+`/__dsh_bridge__/login`（根绝对路径），会话 Cookie 固定 `Path=/`，token 跳转也用根路径。
+因此原版只能挂在域名根或独立子域名下，无法直接部署到 `https://example.com/dsh/`。
+
+porthole 的唯一二级目录模式：
+
+```text
+浏览器  /dsh/xxx
+  ↓ nginx（proxy_pass http://127.0.0.1:3082/; 带尾斜杠）
+porthole /xxx        ← 内部 req.url 已剥前缀，始终原样转发
+  ↓ 用 X-Forwarded-Prefix: /dsh 生成对外 Location / Cookie Path
+DSH      /xxx
+```
+
+- `X-Forwarded-Prefix` 只由**可信代理**（`trustedProxies`，默认回环）提供，非法值 HTTP/WS 直接 400；
+- 该头只影响对外 `Location` 与 `Cookie Path`，不改变内部路径、不重复剥前缀；
+- 有效前缀是**请求级**的，不会串到下一个直连或不同挂载的请求；
+- 未配置该头时按站点根工作，行为与原版一致。
+
+### 4.2 固定登录入口 —— **porthole 独有**
+
+原版的未登录处理是在**当前路径就地**渲染登录页：只要 `Accept: text/html` 或路径像页面，
+就把登录 HTML 塞回去（判定用 `!req.url.startsWith('/api/') && !req.url.includes('.')`，
+对带点的页面路径容易误判）。这要求登录页里的绝对地址恰好等于当前部署根，因此与二级目录天然冲突。
+
+porthole 改为「固定登录入口」：
+
+| 请求 | 响应 |
+| --- | --- |
+| 外部应用根 `GET/HEAD` 的导航请求（含缺 `Accept`；`Accept: application/json` 等仍走 JSON） | `401` + 登录 HTML |
+| 深层页面导航（`Accept: text/html` 或 `Sec-Fetch-Mode: navigate`） | `302` 到外部应用根（如 `/dsh/`） |
+| API / `bsk-observation` / `plugins` / SSE / POST 等 | `401 JSON`，不返回 HTML、不重定向 |
+| `HEAD` | 无响应体 |
+
+登录页使用相对地址 `fetch('./__dsh_porthole__/login')` 与 `location.replace('./')`，
+因此根部署与二级目录部署都不需要把前缀写进页面。所有 `Location` 都是站内绝对路径，
+不会从 `Host` / `Origin` 拼出 `http://内部:端口`，也不会生成协议相对跳转。
+
+### 4.3 `trustedProxies`：只信任物理连接来源 —— **porthole 独有**
+
+原版判断「是否本机回环」只看 `remoteAddress` 与 `Host`，没有「哪些前置代理可以声明外部路径」的概念。
+porthole 引入精确 IP 白名单：
+
+- 默认 `['127.0.0.1', '::1']`（IPv4-mapped IPv6 等价归一）；
+- 自定义数组**整体替换**默认值，空数组表示不信任任何来源；
+- **只比对 `socket.remoteAddress`，从不读取 `X-Forwarded-For` / `X-Real-IP`**（这两个头客户端可伪造）；
+- 配置非法（主机名、端口、网段、空串等）时**门户不启动**并记错误日志（fail-closed，不会静默放宽）；
+- 目前**只能在 `cordis.yml` 配置**，面板只做只读展示——它是安全边界，不适合从 Web 面板修改。
+
+### 4.4 gzip：保留客户端的 `Accept-Encoding` —— **porthole 独有**
+
+原版为了注入 HTML（PWA / polyfill / 移动端样式）必须拿到**未压缩**的 HTML，因此在转发前
+`delete out['accept-encoding']`，等于把 DSH 自带的 gzip 整个关掉。
+
+porthole 不注入 HTML，因此**保留 `Accept-Encoding`**，让 DSH 按浏览器能力压缩并原样透传。
+实测主 bundle 941 KB → 320 KB（省 66%）。唯一例外是 `session/list` 投影剥离：
+剥离后 body 重新序列化为明文，此时删 `content-encoding` 并重算 `content-length`（与原版一致，不重新压缩）。
+
+### 4.5 反代不漏门禁 —— **porthole 更强**
+
+原版 `verifyRequest` 的本机免密判断允许 `host === ''`；nginx 漏配 `proxy_set_header Host` 时，
+空 Host 会被当成回环，等于全站免密。porthole 要求 Host 必须是**非空的回环名**
+（`127.0.0.1` / `localhost` / `[::1]`），缺 Host 按误配拒绝。
+
+### 4.6 工作区真实注册 —— **porthole 修掉了上游 bug**
+
+见 §1.4：原版 `this.ctx` 未赋值，「远程添加工作区」从不真正注册；porthole 显式接线
+`hostCtx`，能返回 DSH 真实 `workspaceId` 并回读列表。
+
+---
+
+## 5. 已知风险与缺陷
+
+### 5.1 【低·当前宿主非必需】HTTP 局域网地址下缺少浏览器 polyfill
 
 原版通过服务端 HTML 注入补齐 `crypto.randomUUID` / `AbortSignal.any` / `Promise.iterator`，
 用来兜住「不安全上下文（HTTP 非 localhost）」下这些 API 缺失的浏览器。
@@ -314,7 +398,7 @@ porthole 明确不注入响应体，**因此这条兜底没有了**。
 **结论**：不做。若未来手机端出现 `crypto.randomUUID is not a function`，再按原版方式
 加回那 3 段 `<head>` 注入（约 20 行，只改 head、不动业务），届时升级本报告即可。
 
-### 4.2 【已解决 v1.1.1】connection RPC 注册回归 —— 曾导致插件完全不激活
+### 5.2 【已解决 v1.1.1】connection RPC 注册回归 —— 曾导致插件完全不激活
 
 DSH ≥ `0.1.5-alpha.1` 的 `@deepseek-ai/dsh-client-connection` 存在宿主侧回归：
 `HostConnectionService.register()` 里写的是 `owner.effect(() => owner.webServer.register(route))`，
@@ -343,56 +427,123 @@ dsh-porthole (dsh-porthole): Error: cannot get property "webServer" without inje
 **回归验证**：修前 `--dump-config` 正常但启动报上面那段错；修后同一 profile 启动无任何告警，
 代理 3895 正常监听，直连 DSH 401 / 经 porthole 200，自检五项全绿。
 
-### 4.3 【低】没有端口冲突自动避让
+### 5.3 【已修复】WebSocket 升级缺 Origin 白名单（CSWSH 纵深防御）
+
+原版在 WS 升级时额外校验 `Origin`（`lib/index.js` 的 upgrade 处理器）：
+
+```js
+const origin = req.headers?.origin;
+if (origin) {
+  const allowed = this.allowedOrigins?.() ?? [];
+  if (origin === OPAQUE_ORIGIN || !allowed.includes(origin)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n...');
+    socket.destroy();
+    return;
+  }
+}
+```
+
+带 Origin 且不在面板来源白名单内则 `403`；**缺失 Origin 一律放行**（兼容 ws 库、命令行、
+隧道转发等非浏览器客户端）。目的：防止用户浏览器里的恶意页面借已有 Cookie 建立 WebSocket
+（Cross-Site WebSocket Hijacking）。
+
+porthole 的 `_handleUpgrade` 原先只做 `authManager.verifyRequest(req)`，**没有这一步 Origin 校验**；
+**现已补齐**（`lib/proxy.js` 的 `_handleUpgrade`：认证之后校验 `Origin`，缺失 Origin 放行）。
+实现上比原版多留了一条同源路径：`Origin` 与本次请求的 `Host` 一致也放行——这样经 nginx 的
+HTTPS 外部域名（如 `https://example.com`）不会被误杀；真正的跨站页面 Origin 与 Host 必然不同，
+仍会被拒绝。
+
+**能防住的真实场景**：用户本机开着另一个开发服务器（如 `http://127.0.0.1:5173`）或同站
+不同端口的应用，页面里的脚本 `new WebSocket('ws://127.0.0.1:3082/plugins/events')`。
+WebSocket 握手会带上 3082 的 Cookie，`verifyRequest` 判定通过（回环 + Host 回环），
+于是能读到会话事件流。原版的 Origin 白名单会拒绝 `http://127.0.0.1:5173`，porthole 会放行。
+跨站场景受 `SameSite=Lax` 保护（跨站握手不带 Cookie），所以定为【低】，属于纵深防御缺口。
+
+**回归**：已并入 `test/porthole-entry.test.mjs` 的「实时通道与本机令牌」核心用例，覆盖
+「陌生 Origin → 403 / 同源或白名单 Origin → 101 / 无 Origin → 101」；不新增独立用例。
+
+### 5.4 【已修复】`loopback-token` 来源白名单缺 `localhost:<dshPort>` 等变体
+
+`loopback-token` 用于本机面板自动领取 `adminToken`（免输管理密码）。它是跨源请求，
+服务端按 `Origin` 白名单决定是否签发。两边实现对比：
+
+| Origin 形态 | 原版 dsh-bridge | porthole（修复前） |
+| --- | --- | --- |
+| `http://127.0.0.1:<proxyPort>` | ✅ | ✅ |
+| `http://localhost:<proxyPort>` | ✅ | ✅ |
+| `http://<lanIp>:<proxyPort>` | ✅ | ✅（当前网卡） |
+| `http://127.0.0.1:<dshPort>` | ✅ | ✅ |
+| `http://localhost:<dshPort>` | ✅ | ❌ **缺** |
+| `http://<lanIp>:<dshPort>` | ✅（枚举所有网卡） | ❌ **缺** |
+| `dsh-app://app` | ✅ | ✅ |
+
+**修复**：`service.js` 的 `allowedOrigins()` 已补齐 `http://localhost:<dshPort>`、
+`http://<lanIp>:<dshPort>`，并枚举全部网卡（代理端口与 DSH 原生端口各一份）。
+
+**回归**：已并入上述「实时通道与本机令牌」核心用例（`allowedOrigins()` 覆盖
+`http://localhost:<dshPort>`），不新增独立用例。
+
+**修复前会踩到的场景**：用户在电脑上直接打开 DSH 原生端口 `http://localhost:3080`（而不是
+`http://127.0.0.1:3080`）。面板首屏自动向 `http://localhost:3082/__dsh_porthole__/loopback-token`
+领令牌，Origin 是 `http://localhost:3080` —— 不在 porthole 名单里，返回 403，面板显示
+「本机自动解锁失败：本机令牌被拒绝（来源不在白名单）。可在「安全认证」里输管理密码解锁。」
+功能不瘫痪（还能输管理密码），但本机免密体验失效。
+
+`http://<lanIp>:<dshPort>` 原先面板不会自动领令牌（`isLocalHost` 只认 127.0.0.1 / localhost /
+`::1`），所以未直接触发；补齐后与上游一致，并覆盖多网卡 / 桌面壳绑定网卡等边缘情况。
+
+### 5.5 【低】没有端口冲突自动避让
 
 端口被占用时只会在面板显示「端口已被占用」，不会自动换下一个可用端口。
 好处是行为可预测（用户配置的端口就是用户配置的端口），代价是需要手动改。
 
-### 4.4 【已解决】密码遗忘救急通道
+### 5.6 【已解决】密码遗忘救急通道
 
 v1.1.0 起已迁移 `reset-auth` 机制：`touch ~/.dsh/dsh-porthole/reset-auth` 后重启 DSH，
 全量清空双密码与安全策略，标记文件一次性自动删除。`secretToken` 保留（二维码仍有效）。
 
-### 4.5 【低】与 DSH 无关的第三方依赖收敛
+### 5.7 【低】与 DSH 无关的第三方依赖收敛
 
 porthole 只依赖 `qrcode`。原版的 `ws`（隧道客户端必需）、`@larksuite/*`、`@tencent-connect/*`、
 `puppeteer-core`（UI 验收）全部移除。这是收益，不是风险 —— 列在此处仅为完整。
 
 ---
 
-## 5. 建议的补齐优先级
+## 6. 建议的补齐优先级
 
-如果后续要按「性价比」逐步往回加，推荐顺序（P2 / P5 已于 v1.1.0 完成）：
+如果后续要按「性价比」逐步往回加，推荐顺序：
 
 | 优先级 | 补什么 | 理由 | 预估成本 |
 | --- | --- | --- | --- |
 | ~~P0~~ | ~~`connection-compat.js` 兜底~~ | ✅ **v1.1.1 已完成**（实机命中并修复） | — |
-| ~~P1~~ | ~~浏览器 polyfill 注入~~ | ✅ **v1.2.0 实测关闭**：DSH 0.2.1-rc.5 前端 `randomUUID` 出现 0 次，当前宿主非必需（§4.1） | — |
+| ~~P1~~ | ~~浏览器 polyfill 注入~~ | ✅ **v1.2.0 实测关闭**：DSH 0.2.1-rc.5 前端 `randomUUID` 出现 0 次（§5.1） | — |
 | ~~P2~~ | ~~`reset-auth` 救急文件~~ | ✅ **v1.1.0 已完成** | — |
-| **P3** | 移动端最小样式让位（不接管宿主类名，只加 `viewport` + `overscroll-behavior`） | 显著改善手机可用性，且不碰 DSH 布局 | ~40 行 CSS 注入 |
-| ~~P4~~ | ~~会话投影剥离~~ | ✅ **v1.2.0 已完成**（实机验证 9/9 会话剥离） | — |
-| ~~P5~~ | ~~管理员密码 / 两级权限~~ | ✅ **v1.1.0 已完成**（含防篡改锁、验证模式、本机特权令牌） | — |
+| ~~P3~~ | ~~WebSocket Origin 白名单（CSWSH 纵深防御）~~ | ✅ **已完成**（`_handleUpgrade` 已按原版补齐，含回归测试） | — |
+| ~~P4~~ | ~~`loopback-token` 来源补 `localhost:<dshPort>` / `http://<lanIp>:<dshPort>`~~ | ✅ **已完成**（`allowedOrigins()` 已补齐并枚举全部网卡） | — |
+| **P5** | 移动端最小样式让位（不接管宿主类名，只加 `viewport` + `overscroll-behavior`） | 显著改善手机可用性，且不碰 DSH 布局 | ~40 行 CSS 注入 |
 | **P6** | 公网隧道 | 这是原版最大的差异化能力，但也是最大的复杂度来源（cloudflared 生命周期 + 二进制管理 + 网络参数） | ≥ 1300 行，不建议在 porthole 里做 |
 | **P7** | IM 机器人 | 与 porthole 的定位（网页转发）正交，应该继续留在原版 | ≥ 8000 行，不建议 |
 
 ---
 
-## 6. 选型建议
+## 7. 选型建议
 
 | 你的情况 | 选哪个 |
 | --- | --- |
 | 只想在沙发上用手机看 DSH 跑任务，不出门 | **porthole** |
+| 需要挂在 `https://example.com/dsh/` 这类二级目录下 | **porthole**（原版不支持） |
 | 需要出门在外访问（4G / 异地 / 公司网络） | 原版（开 Cloudflare 或自建隧道） |
 | 需要在微信 / 飞书里给 Agent 发指令、点审批卡片 | 原版 |
 | 手机是主要操作界面，要求原生 App 级体验 | 原版（PWA + 移动端改写） |
-| 在意代码可审计性（41 个文件 vs 3 万行 + 14 万行 vendored bundle） | **porthole** |
-| 在意依赖数量 / 供应链风险 | **porthole**（1 个运行时依赖 vs 5 个 + 外部二进制） |
+| 在意代码可审计性（3 790 行 vs 21 713 行 + 140 184 行 vendored bundle） | **porthole** |
+| 在意依赖数量 / 供应链风险 | **porthole**（1 个运行时依赖 vs 2 个 + 外部二进制） |
 | 两者都要 | 改掉其中一个的端口，分别配置 |
 
 ---
 
-**报告基准时间**：2026-11-03
-**最近一次实测**：v1.2.0 在 DSH 0.2.1-rc.5（桌面版）实机验证通过：代理监听、转发 200、RPC 通道、
-session/list 9/9 会话投影剥离、工作区真实注册（DSH UUID + 会话挂接）与敏感路径拦截、自检五项全绿
-**核对方式**：源码逐文件比对 + `wc -l` 统计 + RPC 端点表 diff（47 → 14）+ 依赖清单 diff
-**porthole 测试状态**：v1.4.3，`npm test` → 36/36 通过（代理转发 / WS 升级与鉴权 / 双密码与防篡改锁 / 验证模式 / 应急复位 / connection RPC 兼容垫片 / 会话投影剥离含 gzip 与代理集成 / 工作区注册与空会话回归 / 敏感路径拦截 / 登录页与挂载前缀 / PWA 公开资源及门禁边界 / 客户端真实 React 渲染）
+**报告基准时间**：2026-11-05
+**核对方式**：`gh repo clone wenbin-wb/dsh-bridge`（`615286b`，2026-11-03，`v2.17.8`）后逐文件比对；
+`wc -l` 统计（剔除 vendored bundle）；RPC 端点表 diff（47 → 14）；依赖清单 diff；
+`diff` 校验共享模块（`session-strip.js` 与 `sse-keepalive.js` 逐字节相同，`compat.js` 相同）。
+**porthole 测试状态**：`npm test` → **12/12 通过**（认证、HTTP 转发、PWA、gzip/投影剥离、工作区、
+设置面板、可信代理前缀与固定登录入口、WebSocket/SSE）。
