@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "DSH 本机门户：反向代理 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名/二级目录，可绑定指定网卡。",
-  "releaseNotes": "【v1.5.0】重要变更（不向后兼容）：二级目录改为唯一模式——由 nginx 剥前缀并固定上报 X-Forwarded-Prefix，移除 basePath / publicPath 手动挂载与严格收敛逻辑。升级前请把 nginx 改为 proxy_pass http://<porthole地址>:3082/;（带尾斜杠）+ proxy_set_header X-Forwarded-Prefix /dsh;，否则原 basePath 配置将不再生效。新增：固定登录入口（未登录页面导航回应用根，API/SSE/写请求返回 JSON 401）、trustedProxies 精确 socket 对端白名单、WebSocket Origin 白名单（CSWSH 纵深防御）、loopback-token 来源补全 localhost/各网卡的 DSH 原生端口、设置页导航图标。安全：本机免密要求非空回环 Host。测试：12 项核心用例全部通过。",
+  "releaseNotes": "【v1.5.1】trustedProxies 语义调整：本地回环（127.0.0.1 / ::1）改为不可移除的可信基线，自定义数组在其上追加而非整体替换；空数组 [] 仍信任回环。此前自定义 trustedProxies 会连本机回环一并排除、导致同机 nginx 上报的 X-Forwarded-Prefix 被忽略；升级后同机 nginx 无需再手动列入回环地址。非法配置（主机名/端口/网段）仍 fail-closed、门户不启动。测试：12 项核心用例全部通过。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

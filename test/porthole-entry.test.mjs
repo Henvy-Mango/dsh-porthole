@@ -20,8 +20,9 @@ async function relay(port, prefix) {
   }));
 }
 
-test('只接受可信物理代理声明的前缀，跳转不使用内部 HTTP 域名或端口', async () => {
-  for (const [trustedProxies, location] of [[undefined, '/dsh/'], [['10.9.9.9'], '/']]) {
+test('本地回环是可信基线：自定义数组/空数组都仍信任回环前缀，跳转不用内部域名端口', async () => {
+  // All cases: loopback peer is always trusted, so /dsh is accepted regardless of config.
+  for (const [trustedProxies, location] of [[undefined, '/dsh/'], [['10.9.9.9'], '/dsh/'], [[], '/dsh/']]) {
     await withProxy({ authConfig: { enabled: true }, trustedProxies }, async ({ port }) => {
       const headers = { Accept: 'text/html', 'X-Forwarded-Prefix': '/dsh',
         Host: 'portal.example:9999', 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '10.9.9.9' };
