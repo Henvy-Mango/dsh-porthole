@@ -25,9 +25,10 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 | HTTP 转发 | 页面、API、静态资源全量透传（仅 `session/list` 做投影剥离，见下） |
 | WebSocket 转发 | `/plugins/events` 等实时通道原样升级；未认证不放行 |
 | SSE 空闲保活 | 静默 25s 注入 `: keepalive` 注释帧，防链路按空闲回收掐断实时通道 |
-| **二级目录挂载** | 可挂在 `/dsh` 这类前缀下（nginx 子路径）；设了前缀即**强制严格模式**：根路径 302 过去、未挂载路径 404，并带防重定向循环保护 |
+| **二级目录挂载** | 可挂在 `/dsh` 这类前缀下（nginx 子路径）：nginx 剥前缀并固定上报 `X-Forwarded-Prefix`，porthole 始终原样转发内部 `req.url`，只用该头生成对外 `Location` 与 `Cookie Path` |
 | **监听地址可选** | `0.0.0.0`（全部网卡）/ `127.0.0.1`（仅本机）/ 任意本机网卡 IP；展示的 IP 跟随绑定值 |
-| **访问地址自洽** | 面板顶部地址、复制按钮、二维码统一带前缀且以 `/` 结尾（如 `http://192.168.1.103:3082/dsh/`） |
+| **固定登录入口** | 外部应用根即入口（站点根 `/`、挂载时 `/dsh/`）；仅根 GET/HEAD 未登录返回 401 登录页；深层 HTML 导航 302 回入口；API/SSE/fetch/POST 一律 401 JSON |
+| **访问地址自洽** | 面板顶部地址、复制按钮、二维码统一带前缀且以 `/` 结尾（如 `http://192.168.1.103:3082/dsh/`）；展示真实局域网地址，不从代理头猜公开域名 |
 | **保留 DSH 压缩** | 转发客户端的 `Accept-Encoding`，让 DSH 自己的 gzip 生效（实测主 bundle 941 KB → 320 KB）；上游为注入 HTML 会删掉该头，等于关掉压缩 |
 | 会话投影剥离 | `session/list` 移除 `contextHeaders` / `contextTimeline`（每会话可达数 MB、无 UI 读取）；支持 gzip，剥离失败一律原样直通 |
 | 多网卡识别 | 物理 Wi-Fi / 有线网卡优先，WSL / VMware / Docker / Hyper-V / Mihomo / Clash 大幅降权 |
@@ -57,7 +58,7 @@ loopback 会话 cookie —— 所以手机浏览器不用碰 `?token=`。
 
 | 能力 | 说明 |
 | --- | --- |
-| 二级目录 + 严格收敛 | 原版只有「局域网/隧道地址」，没有挂载前缀概念，也无法把根路径收敛掉 |
+| 二级目录 + 固定入口 | 原版只有「局域网/隧道地址」，没有挂载前缀概念；这里由 nginx 剥前缀 + `X-Forwarded-Prefix` 声明外部前缀，登录入口固定在对外应用根 |
 | 监听地址可绑定 | 原版固定 `0.0.0.0`，无法只监听某张网卡 |
 | 工作区真正注册 | 原版 `BridgeService.this.ctx` 从未赋值，`addWorkspace` 只做安全校验便返回，**从不真正注册**；这里显式接线并实机验证 |
 | macOS 临时目录可用 | 原版 POSIX 黑名单里笼统的 `/private` 会把 `/private/var/folders/...`（macOS 所有临时目录）误判为系统目录 |
@@ -95,30 +96,46 @@ DSH 会自动加载 `client/client.js`。装好后**重启宿主**，进 **设�
   config:
     port: 3082          # 门户监听端口，1024–65535；外部链路（frps / EasyTier）指向它
     host: 0.0.0.0       # 监听地址：0.0.0.0 / 127.0.0.1 / 任一网卡 IP
-    basePath: ''        # 挂在二级目录（如 /dsh）时填前缀；'' = 站点根
     sseKeepalive: true  # SSE 空闲保活，默认开
+    # trustedProxies 默认 ['127.0.0.1','::1']（只信回环，且只精确比对 socket.remoteAddress）。
+    # 异机 nginx 时把它所在机器的真实 IP 加进来；数组会整体替换默认值。
+    # trustedProxies: ['127.0.0.1', '::1', '192.168.0.10']
 ```
 
-`host` 与 `basePath` 也可直接在面板 **设置 → 远程访问 → 局域网访问** 里改（保存即生效，
+`host` 也可直接在面板 **设置 → 远程访问 → 局域网访问** 里改（保存即生效，
 并写入 `config.json`；**面板里的值优先于 `cordis.yml`**，避免重启后被配置文件覆盖回去）。
+二级目录由 nginx 剥前缀并用固定的 `X-Forwarded-Prefix` 声明外部前缀（见下），
+porthole 侧无需任何前缀配置。`trustedProxies` 目前只在 `cordis.yml` 里配。
 
 ### 挂在 nginx 后面
 
 支持**子域名**与**二级目录**两种挂法，完整配置（含 WebSocket、SSE、Cookie Path、
-回环身份防伪与排错表）见 **[docs/nginx.md](./docs/nginx.md)**。
+`X-Forwarded-Prefix` 与排错表）见 **[docs/nginx.md](./docs/nginx.md)**。
+
+二级目录的唯一做法（nginx 剥前缀并固定上报外部前缀）：
+
+- nginx 用 **带尾斜杠** 的 `proxy_pass http://192.168.0.66:3082/;`，由 nginx 替 porthole 剥掉 `/dsh/`；
+  porthole 收到的内部 `req.url` 已是 `/…`，**始终原样转发**，不会重复 strip；
+- 用 `proxy_set_header X-Forwarded-Prefix /dsh;` **固定为 `/dsh`**（覆盖客户端自带值）——
+  它只代表外部路径，porthole 只用它生成对外 `Location` 与 `Cookie Path`；
+- 同机 nginx：默认信任回环即可；**异机 nginx**：把 nginx 机器真实 IP 写进 `trustedProxies`
+  （精确 socket 对端，不是客户端 IP，也不是 `X-Forwarded-For`）；
+- 入口 `location = /dsh` 用 `absolute_redirect off; return 301 /dsh/;`，**不要**再额外
+  `proxy_redirect` 去补前缀（会变成 `/dsh/dsh/…` 双前缀）；
+- **root（站点根）部署**时清除客户端自带的声明：`proxy_set_header X-Forwarded-Prefix "";`。
 
 两个容易踩的点先提醒：
 
 - nginx 必须转发**真实 Host**（`proxy_set_header Host $host;`）——
-  porthole 靠 Host 判断请求是否来自本机回环；固定成 `127.0.0.1` 会让远程请求被误判为已认证；
-- 二级目录下 nginx **不要**替它剥前缀：用 `proxy_pass http://127.0.0.1:3082;`（**不带**尾斜杠）。
-  porthole 自己会剥并做严格收敛；若 nginx 抢先剥掉，请求会被判成「未挂载路径」而 404。
+  porthole 靠 Host 判断「是否本机回环」以决定是否签发本机特权令牌；固定成 `127.0.0.1` 会让
+  远程请求被误判为本机；
+- 保留 `absolute_redirect off`、BrowserSkill 的 `307` 兜底与局域网二维码的根地址（详见 docs/nginx.md）。
 
 运行期状态落在 `~/.dsh/dsh-porthole/`：
 
 | 文件 | 内容 | 权限 |
 | --- | --- | --- |
-| `config.json` | 端口、监听地址、二级目录、认证配置（双密码哈希 / token / 策略） | `0600` |
+| `config.json` | 端口、监听地址、认证配置（双密码哈希 / token / 策略） | `0600` |
 | `sessions.json` | 已登录设备的会话令牌 | `0600` |
 | `reset-auth` | **应急复位标记**（放这里 = 下次启动清空所有密码） | — |
 
@@ -130,6 +147,14 @@ DSH 会自动加载 `client/client.js`。装好后**重启宿主**，进 **设�
 `/favicon.svg`、`/favicon-dark.svg` 允许匿名 GET/HEAD，避免登录后仍出现 manifest 401。
 挂在二级目录时，这些资源同样必须带挂载前缀（例如 `/dsh/manifest.webmanifest`）。
 页面、API、其它资源以及写请求仍按原有门禁校验；此例外不会签发访问会话。
+
+固定登录入口的判定：
+
+- 仅**外部应用根的 GET/HEAD 且未登录**返回 `401` 登录 HTML（`HEAD` 不带 body）；
+- 未登录的**深层页面导航**（明确 `Accept: text/html`）`302` 回入口；
+- **API（`/api`、`/bsk-observation` 等）、非 HTML fetch、SSE、`POST`** 一律 `401 JSON`，
+  不会被喂成登录 HTML、也不会被重定向；
+- 所有 `Location` 都是站内绝对路径，不从 `Host`/`Origin` 拼出内部地址、也不生成协议相对跳转。
 
 ### 两把钥匙
 
@@ -208,7 +233,7 @@ dsh-porthole: [保命救急] 检测到 reset-auth 标记文件，已重置所有
 ## 开发
 
 ```bash
-npm test                                    # 36 个用例（核心链路 / 认证 / 附加能力）
+npm test                                    # 核心链路 / 认证 / 附加能力（node --test）
 npm run build:client                        # client/index.js → client/client.js
 node test/manual-auth.mjs 34567             # 手工验收：跑一遍完整认证流程
 ```
@@ -225,8 +250,12 @@ node test/manual-auth.mjs 34567             # 手工验收：跑一遍完整认�
 | 提示「需要管理员权限」 | 输管理密码解锁；或在电脑上用回环地址打开面板（自动免密） |
 | 改完验证方式/策略后要重新解锁 | 设计如此：策略变更会吊销所有管理员令牌，确保新策略立即生效 |
 | 设置了密码但本机不用输 | 设计如此：`127.0.0.1` 免密（面板可关） |
-| 访问 `/dsh/` 一直 404 | nginx 仍在剥前缀。改用 `proxy_pass http://127.0.0.1:<端口>;`（不带尾斜杠），见 [docs/nginx.md](./docs/nginx.md) |
-| 打开根路径后反复跳转 | 同上，属「nginx 剥前缀 + 严格模式」的组合；插件有一次性防循环降级，但子路径仍会 404，应修正 nginx |
+| 访问 `/dsh/` 一直 404 | 确认 `proxy_pass` **带**尾斜杠（nginx 剥掉 `/dsh/` 前缀）且设了固定的 `X-Forwarded-Prefix /dsh`，见 [docs/nginx.md](./docs/nginx.md) |
+| 出现 `/dsh/dsh/` 双前缀 | 又额外写了 `proxy_redirect`/`return` 去补前缀；去掉多余的 `proxy_redirect` 即可 |
+| API / SSE 拿到一页登录 HTML 或 302 | 不该发生：API/SSE/POST 应得 `401 JSON`。见到 HTML 说明 nginx 没剥前缀或没正确上报 `X-Forwarded-Prefix` |
+| 异机 nginx 下 `X-Forwarded-Prefix` 不生效 | `trustedProxies` 没加 nginx 机器真实 IP（默认只信回环）；注意填 socket 对端 IP，不是客户端 IP/XFF |
+| 可信代理发来非法前缀被 `400` | 前缀含 `..`、`%`、`?`、`,`、`\`、`//`、超长等；改成合法 `/dsh` 形态 |
+| BrowserSkill 观察面板 `/bsk-observation/*` 404 | 临时在 nginx 加 `location /bsk-observation/ { absolute_redirect off; return 307 /dsh$request_uri; }`，见 [docs/nginx.md](./docs/nginx.md) |
 | 绑了具体网卡后 `127.0.0.1` 打不开 | 绑定具体 IP 时不会同时监听回环（Windows 行为）；改用该 IP 访问，或把监听地址改回 `0.0.0.0` |
 | 面板控件点了没反应 | 早期版本在桌面版（`dsh-app://app`）下拿不到管理员令牌；1.3.1 起已修。当前版本会在卡片内直接显示失败原因 |
 

@@ -156,7 +156,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [guestPassword, setGuestPassword] = React.useState('');
   const [adminPasswordNew, setAdminPasswordNew] = React.useState('');
   const [portVal, setPortVal] = React.useState('');
-  const [basePathVal, setBasePathVal] = React.useState('');
   // 卡片内联反馈：面板顶部的全局提示离这张卡片太远，滚动后看不见
   const [proxyMsg, setProxyMsg] = React.useState(null);
   const [hostVal, setHostVal] = React.useState('0.0.0.0');
@@ -177,7 +176,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       if (res?.ok) {
         setStatus(res.value);
         setPortVal(String(res.value.proxy.port));
-        setBasePathVal(res.value.basePath || '');
         setHostVal(res.value.host || '0.0.0.0');
         return res.value;
       }
@@ -399,20 +397,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
 
   const { proxy, lan } = status;
 
-  /**
-   * 把用户填的 basePath 翻译成「实际要访问的地址」，让填写结果一眼可验。
-   * 与后端 validateBasePath 的归一化规则保持一致（补前导斜杠、去尾斜杠）。
-   */
-  const previewUrl = (() => {
-    // 基线必须用「主机:端口」而不是 lan.url —— lan.url 现在已经带上生效中的 basePath，
-    // 拿它再拼输入框里的前缀会得到 /dsh/dsh/。
-    const base = `http://${lan.ip || '127.0.0.1'}:${proxy.port}`;
-    let p = String(basePathVal || '').trim();
-    if (!p || p === '/') return `${base}/`;
-    if (!p.startsWith('/')) p = `/${p}`;
-    p = p.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
-    return `${base}${p}/`;
-  })();
   const lanUrl = lan.url;
 
   return h('div', null,
@@ -493,16 +477,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           onClick: () => void call(EP.setPort, { port: Number(portVal) }),
         }, '应用')),
 
-      // ---- 二级目录（挂载前缀）----
-      // 设了前缀即强制生效：只放行该前缀下的路径，未挂载路径一律拒绝（无开关）。
-      h(Row, { label: '二级目录' },
-        h('input', {
-          style: S.input,
-          placeholder: '留空 = 站点根；填 /dsh 表示 http://IP:端口/dsh/',
-          value: basePathVal,
-          disabled: busy,
-          onChange: (e) => setBasePathVal(e.target.value),
-        })),
+      // ---- 监听地址 ----
       h(Row, { label: '监听地址' },
         h('select', {
           style: S.input,
@@ -526,41 +501,34 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           disabled: busy,
           onClick: async () => {
             setProxyMsg(null);
-            const v = await call(EP.setProxyConfig, {
-              basePath: basePathVal,
-              host: hostVal,
-            });
+            const v = await call(EP.setProxyConfig, { host: hostVal });
             if (v) {
-              setProxyMsg({
-                kind: 'ok',
-                text: `已保存：挂在 ${v.basePath || '站点根'}，监听 ${v.host}。请用 ${previewUrl} 访问。`,
-              });
+              setProxyMsg({ kind: 'ok', text: `已保存：监听 ${v.host}。` });
             } else {
               // call() 把原因写进面板顶部提示；这里复制一份到操作点旁边，
               // 否则滚动到这一段时看不到任何反馈，只会觉得"点了没反应"。
               setProxyMsg({ kind: 'bad', text: msg?.text || '保存失败，原因见面板顶部提示' });
             }
           },
-        }, '保存挂载设置')),
+        }, '保存监听设置')),
       proxyMsg
         ? h('div', { style: { ...(proxyMsg.kind === 'ok' ? S.ok : S.bad), margin: '0 0 8px', lineHeight: 1.6 } },
             proxyMsg.text)
         : null,
       h('p', { style: { ...S.hint, margin: '0 0 6px' } },
-        '将从此地址访问：', h('span', { style: S.mono }, previewUrl)),
-      h('p', { style: { ...S.warn, margin: '0 0 6px' } },
-        '⚠️ 二级目录是 URL 路径前缀，不是域名：要写 /dsh，不要写 -DSH 或 dsh.example.com。'),
-      h('p', { style: { ...S.hint, margin: '0 0 6px' } },
         '选 0.0.0.0 时所有地址都能访问；选具体 IP 时只有该地址能访问，访问地址也会跟着变。'),
-      basePathVal.trim()
-        ? h('p', { style: { ...S.warn, margin: '0 0 6px' } },
-            '设定后只允许从该目录访问：根路径会自动跳转到它，其它未挂载路径返回 404。'
-            + '若前面有 nginx，请不要让它再剥前缀（proxy_pass http://127.0.0.1:<端口>; 不带尾斜杠）。')
-        : null,
       h('p', { style: S.hint },
         '同一 Wi-Fi / 局域网下的手机、平板、其它电脑，打开上面的地址即可继续使用这台电脑上的 DSH。'
         + '扫码只在局域网内有效：路由器不做端口映射，这套地址出不了内网。'
-        + '填错二级目录后当前路径会失效，可用本机 127.0.0.1 打开面板改回。')),
+        + '对外路径（如子目录前缀）由前置反向代理声明，无需在此填写。'),
+      // 可信代理白名单（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
+      // 不提供编辑控件——它是 cordis 配置项（trustedProxies），改它需重启宿主。
+      h('p', { style: { ...S.hint, margin: '10px 0 0' } },
+        '可信前置代理（决定是否采纳 X-Forwarded-Prefix）：',
+        h('span', { style: S.mono },
+          status.trustedProxies === undefined ? '（默认回环）'
+            : status.trustedProxies.length ? status.trustedProxies.join(', ') : '（不信任任何来源）'),
+        '（在 cordis 配置 trustedProxies 中修改）')),
 
     // ---------------- 2. 安全认证 ----------------
     h(Card, { title: '安全认证' },
@@ -793,7 +761,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
     // 版本页脚：排障第一眼要看的东西（升级后是否真的生效、面板与包是否同版本）
     h('p', { style: { ...S.hint, textAlign: 'center', marginTop: 4 } },
       `dsh-porthole v${status.version || '(未知)'}`
-      + (status.basePath ? ` · 挂在 ${status.basePath}` : '')
       + (status.host && status.host !== '0.0.0.0' ? ` · 仅监听 ${status.host}` : '')));
 }
 

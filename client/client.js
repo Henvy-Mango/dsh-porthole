@@ -147,7 +147,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
   const [guestPassword, setGuestPassword] = React.useState("");
   const [adminPasswordNew, setAdminPasswordNew] = React.useState("");
   const [portVal, setPortVal] = React.useState("");
-  const [basePathVal, setBasePathVal] = React.useState("");
   const [proxyMsg, setProxyMsg] = React.useState(null);
   const [hostVal, setHostVal] = React.useState("0.0.0.0");
   const [wsList, setWsList] = React.useState(null);
@@ -162,7 +161,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       if (res?.ok) {
         setStatus(res.value);
         setPortVal(String(res.value.proxy.port));
-        setBasePathVal(res.value.basePath || "");
         setHostVal(res.value.host || "0.0.0.0");
         return res.value;
       }
@@ -363,14 +361,6 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
     );
   }
   const { proxy, lan } = status;
-  const previewUrl = (() => {
-    const base = `http://${lan.ip || "127.0.0.1"}:${proxy.port}`;
-    let p = String(basePathVal || "").trim();
-    if (!p || p === "/") return `${base}/`;
-    if (!p.startsWith("/")) p = `/${p}`;
-    p = p.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-    return `${base}${p}/`;
-  })();
   const lanUrl = lan.url;
   return h(
     "div",
@@ -470,19 +460,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           onClick: () => void call(EP.setPort, { port: Number(portVal) })
         }, "\u5E94\u7528")
       ),
-      // ---- 二级目录（挂载前缀）----
-      // 设了前缀即强制生效：只放行该前缀下的路径，未挂载路径一律拒绝（无开关）。
-      h(
-        Row,
-        { label: "\u4E8C\u7EA7\u76EE\u5F55" },
-        h("input", {
-          style: S.input,
-          placeholder: "\u7559\u7A7A = \u7AD9\u70B9\u6839\uFF1B\u586B /dsh \u8868\u793A http://IP:\u7AEF\u53E3/dsh/",
-          value: basePathVal,
-          disabled: busy,
-          onChange: (e) => setBasePathVal(e.target.value)
-        })
-      ),
+      // ---- 监听地址 ----
       h(
         Row,
         { label: "\u76D1\u542C\u5730\u5740" },
@@ -508,20 +486,14 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
           disabled: busy,
           onClick: async () => {
             setProxyMsg(null);
-            const v = await call(EP.setProxyConfig, {
-              basePath: basePathVal,
-              host: hostVal
-            });
+            const v = await call(EP.setProxyConfig, { host: hostVal });
             if (v) {
-              setProxyMsg({
-                kind: "ok",
-                text: `\u5DF2\u4FDD\u5B58\uFF1A\u6302\u5728 ${v.basePath || "\u7AD9\u70B9\u6839"}\uFF0C\u76D1\u542C ${v.host}\u3002\u8BF7\u7528 ${previewUrl} \u8BBF\u95EE\u3002`
-              });
+              setProxyMsg({ kind: "ok", text: `\u5DF2\u4FDD\u5B58\uFF1A\u76D1\u542C ${v.host}\u3002` });
             } else {
               setProxyMsg({ kind: "bad", text: msg?.text || "\u4FDD\u5B58\u5931\u8D25\uFF0C\u539F\u56E0\u89C1\u9762\u677F\u9876\u90E8\u63D0\u793A" });
             }
           }
-        }, "\u4FDD\u5B58\u6302\u8F7D\u8BBE\u7F6E")
+        }, "\u4FDD\u5B58\u76D1\u542C\u8BBE\u7F6E")
       ),
       proxyMsg ? h(
         "div",
@@ -531,28 +503,25 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       h(
         "p",
         { style: { ...S.hint, margin: "0 0 6px" } },
-        "\u5C06\u4ECE\u6B64\u5730\u5740\u8BBF\u95EE\uFF1A",
-        h("span", { style: S.mono }, previewUrl)
-      ),
-      h(
-        "p",
-        { style: { ...S.warn, margin: "0 0 6px" } },
-        "\u26A0\uFE0F \u4E8C\u7EA7\u76EE\u5F55\u662F URL \u8DEF\u5F84\u524D\u7F00\uFF0C\u4E0D\u662F\u57DF\u540D\uFF1A\u8981\u5199 /dsh\uFF0C\u4E0D\u8981\u5199 -DSH \u6216 dsh.example.com\u3002"
-      ),
-      h(
-        "p",
-        { style: { ...S.hint, margin: "0 0 6px" } },
         "\u9009 0.0.0.0 \u65F6\u6240\u6709\u5730\u5740\u90FD\u80FD\u8BBF\u95EE\uFF1B\u9009\u5177\u4F53 IP \u65F6\u53EA\u6709\u8BE5\u5730\u5740\u80FD\u8BBF\u95EE\uFF0C\u8BBF\u95EE\u5730\u5740\u4E5F\u4F1A\u8DDF\u7740\u53D8\u3002"
       ),
-      basePathVal.trim() ? h(
-        "p",
-        { style: { ...S.warn, margin: "0 0 6px" } },
-        "\u8BBE\u5B9A\u540E\u53EA\u5141\u8BB8\u4ECE\u8BE5\u76EE\u5F55\u8BBF\u95EE\uFF1A\u6839\u8DEF\u5F84\u4F1A\u81EA\u52A8\u8DF3\u8F6C\u5230\u5B83\uFF0C\u5176\u5B83\u672A\u6302\u8F7D\u8DEF\u5F84\u8FD4\u56DE 404\u3002\u82E5\u524D\u9762\u6709 nginx\uFF0C\u8BF7\u4E0D\u8981\u8BA9\u5B83\u518D\u5265\u524D\u7F00\uFF08proxy_pass http://127.0.0.1:<\u7AEF\u53E3>; \u4E0D\u5E26\u5C3E\u659C\u6760\uFF09\u3002"
-      ) : null,
       h(
         "p",
         { style: S.hint },
-        "\u540C\u4E00 Wi-Fi / \u5C40\u57DF\u7F51\u4E0B\u7684\u624B\u673A\u3001\u5E73\u677F\u3001\u5176\u5B83\u7535\u8111\uFF0C\u6253\u5F00\u4E0A\u9762\u7684\u5730\u5740\u5373\u53EF\u7EE7\u7EED\u4F7F\u7528\u8FD9\u53F0\u7535\u8111\u4E0A\u7684 DSH\u3002\u626B\u7801\u53EA\u5728\u5C40\u57DF\u7F51\u5185\u6709\u6548\uFF1A\u8DEF\u7531\u5668\u4E0D\u505A\u7AEF\u53E3\u6620\u5C04\uFF0C\u8FD9\u5957\u5730\u5740\u51FA\u4E0D\u4E86\u5185\u7F51\u3002\u586B\u9519\u4E8C\u7EA7\u76EE\u5F55\u540E\u5F53\u524D\u8DEF\u5F84\u4F1A\u5931\u6548\uFF0C\u53EF\u7528\u672C\u673A 127.0.0.1 \u6253\u5F00\u9762\u677F\u6539\u56DE\u3002"
+        "\u540C\u4E00 Wi-Fi / \u5C40\u57DF\u7F51\u4E0B\u7684\u624B\u673A\u3001\u5E73\u677F\u3001\u5176\u5B83\u7535\u8111\uFF0C\u6253\u5F00\u4E0A\u9762\u7684\u5730\u5740\u5373\u53EF\u7EE7\u7EED\u4F7F\u7528\u8FD9\u53F0\u7535\u8111\u4E0A\u7684 DSH\u3002\u626B\u7801\u53EA\u5728\u5C40\u57DF\u7F51\u5185\u6709\u6548\uFF1A\u8DEF\u7531\u5668\u4E0D\u505A\u7AEF\u53E3\u6620\u5C04\uFF0C\u8FD9\u5957\u5730\u5740\u51FA\u4E0D\u4E86\u5185\u7F51\u3002\u5BF9\u5916\u8DEF\u5F84\uFF08\u5982\u5B50\u76EE\u5F55\u524D\u7F00\uFF09\u7531\u524D\u7F6E\u53CD\u5411\u4EE3\u7406\u58F0\u660E\uFF0C\u65E0\u9700\u5728\u6B64\u586B\u5199\u3002"
+      ),
+      // 可信代理白名单（只读诊断）：说明「X-Forwarded-Prefix 是否会被采纳」。
+      // 不提供编辑控件——它是 cordis 配置项（trustedProxies），改它需重启宿主。
+      h(
+        "p",
+        { style: { ...S.hint, margin: "10px 0 0" } },
+        "\u53EF\u4FE1\u524D\u7F6E\u4EE3\u7406\uFF08\u51B3\u5B9A\u662F\u5426\u91C7\u7EB3 X-Forwarded-Prefix\uFF09\uFF1A",
+        h(
+          "span",
+          { style: S.mono },
+          status.trustedProxies === void 0 ? "\uFF08\u9ED8\u8BA4\u56DE\u73AF\uFF09" : status.trustedProxies.length ? status.trustedProxies.join(", ") : "\uFF08\u4E0D\u4FE1\u4EFB\u4EFB\u4F55\u6765\u6E90\uFF09"
+        ),
+        "\uFF08\u5728 cordis \u914D\u7F6E trustedProxies \u4E2D\u4FEE\u6539\uFF09"
       )
     ),
     // ---------------- 2. 安全认证 ----------------
@@ -859,7 +828,7 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
     h(
       "p",
       { style: { ...S.hint, textAlign: "center", marginTop: 4 } },
-      `dsh-porthole v${status.version || "(\u672A\u77E5)"}` + (status.basePath ? ` \xB7 \u6302\u5728 ${status.basePath}` : "") + (status.host && status.host !== "0.0.0.0" ? ` \xB7 \u4EC5\u76D1\u542C ${status.host}` : "")
+      `dsh-porthole v${status.version || "(\u672A\u77E5)"}` + (status.host && status.host !== "0.0.0.0" ? ` \xB7 \u4EC5\u76D1\u542C ${status.host}` : "")
     )
   );
 }

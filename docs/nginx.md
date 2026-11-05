@@ -1,20 +1,22 @@
 # Nginx 反向代理配置
 
 dsh-porthole 可以挂在**子域名**下，也可以挂在**二级目录**（如 `https://example.com/dsh/`）下。
-两种都支持，但所需配置不同，子目录还多一个前提。
+二级目录只有一种做法：由 **nginx 剥前缀**（`proxy_pass` 带尾斜杠）并**固定上报**
+`X-Forwarded-Prefix /dsh`。porthole 始终**原样转发内部 `req.url`**，只用该头生成对外 `Location`
+与 `Cookie Path`；它不会自己剥前缀。
 
 先说结论：
 
-| 方式 | 可行性 | 需要的配置 |
-| --- | --- | --- |
-| 子域名 `dsh.example.com` | ✅ 开箱可用 | 只用 nginx 配置，插件零改动 |
-| 二级目录 `example.com/dsh/` | ✅ 支持 | nginx 配置 + 插件 `basePath` 一项配置 |
+| 方式 | 可行性 | 插件侧配置 | nginx 侧 |
+| --- | --- | --- | --- |
+| 子域名 `dsh.example.com` | ✅ 开箱可用 | 无 | 普通反代，头清空 |
+| 二级目录 `example.com/dsh/` | ✅ 唯一做法 | 异机时配 `trustedProxies` | `proxy_pass http://…:3082/;`（**带**尾斜杠剥前缀）+ 固定 `X-Forwarded-Prefix /dsh` |
 
 ---
 
 ## 一、先决条件
 
-无论哪种方式，都建议 **porthole 只监听回环**，让 nginx 成为唯一入口：
+无论哪种方式，都建议 **porthole 只监听回环**（同机 nginx），让 nginx 成为唯一入口：
 
 - 默认监听 `0.0.0.0:3082`（这样局域网设备可以直连，不依赖 nginx）；
 - 一旦前面挂了 nginx 对外暴露，把监听地址收紧：
@@ -35,9 +37,59 @@ dsh-porthole 可以挂在**子域名**下，也可以挂在**二级目录**（�
 # 面板 → 安全认证 → 开启访问认证，并设置访客密码
 ```
 
+### 信任来源只看 socket 对端，不看 X-Forwarded-For
+
+porthole 判断「请求是否来自可信代理」时，**只看 TCP 连接的 `socket.remoteAddress`**（精确匹配
+白名单），**绝不信任 `X-Forwarded-For` / `X-Real-IP` 这类客户端可伪造的头**来判断来源。
+
+- 默认白名单是 `trustedProxies: ['127.0.0.1', '::1']`（回环，覆盖 IPv4 mapped IPv6 形式）；
+- 同机 nginx（经回环连到 3082）默认即命中，**无需额外配置**；
+- **异机 nginx**（nginx 与 porthole 不在同一台机器）时，必须把 nginx 所在机器的**真实出口 IP**
+  写进 `trustedProxies`，让它成为被信任的 socket 对端：
+
+  ```yaml
+  - name: 'dsh-porthole'
+    config:
+      port: 3082
+      host: 0.0.0.0                  # 异机 nginx 需要能连进来，不能再只听回环
+      trustedProxies:
+        - '192.168.0.10'             # nginx 服务器的真实 IP，不是客户端 IP，也不是 XFF
+  ```
+
+> 自定义 `trustedProxies` 数组会**整体替换**默认值；如果同机 nginx 也需要声明前缀，
+> 请同时列入 `127.0.0.1` / `::1`。这不会影响无代理头的本机根路径访问。
+> 空数组 `[]` 表示不接受任何代理前缀；配置不是合法的精确 IP 数组时，门户会报错并停止启动。
+>
+> ⚠️ 不要把客户端网段、也不要把 `X-Forwarded-For` 里出现的地址写进 `trustedProxies`——
+> 这个名单唯一回答的问题是「哪些 socket 对端才允许替客户端声明外部前缀」。
+
 ---
 
-## 二、子域名方式（推荐）
+## 二、固定登录入口的行为（所有方式通用）
+
+porthole 有一个**固定登录入口**，它的位置是「**外部应用根**」：
+
+- 站点根部署时入口就是 `/`；
+- 挂在 `/dsh/` 时入口就是 `/dsh/`（内部对应 `/`）。
+
+行为约定：
+
+1. **仅根 `GET`/`HEAD` 且未登录**时返回 `401` + 登录 HTML；`HEAD` 不返回 body。
+2. **未登录的深层页面**（明确 `Accept: text/html` 或导航请求）跳 `302` 回到入口。
+3. **API（`/api`、`/bsk-observation` 等）、非 HTML 的 fetch、SSE、`POST`** 一律返回 `401 JSON`，
+   不返回 HTML、也不重定向——避免把脚本/事件流喂成一页登录 HTML。
+4. 根请求即便**缺少 `Accept` 头**也仍视为可登录，返回登录 HTML。
+5. 登录页固定从根位置 `fetch('./__dsh_porthole__/login')`，成功后 `location.replace('./')`，
+   始终留在同一挂载子树内。
+6. 所有 `Location` 都是**站内绝对路径**（例如 `/dsh/…`），不会从 `Host` / `Origin` 拼出
+   `http://内部:端口` 之类的地址，也不会生成协议相对跳转（`//host/…`）。
+
+> 因此 nginx **不需要**额外 `proxy_redirect` 去纠正前缀；porthole 自己产出的 `Location`
+> 已经带对外前缀（来自 `X-Forwarded-Prefix`）。多写 `proxy_redirect` 反而会造成双前缀（`/dsh/dsh/…`）。
+
+---
+
+## 三、子域名方式（推荐用于公网）
 
 `dsh.example.com` → `http://127.0.0.1:3082`
 
@@ -56,20 +108,21 @@ server {
     ssl_certificate     /etc/letsencrypt/live/dsh.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/dsh.example.com/privkey.pem;
 
-    # 附件/文件上传
     client_max_body_size 100m;
 
     location / {
         proxy_pass http://127.0.0.1:3082;
+        # 此模式不使用代理前缀，清除客户端自带的声明。
+        proxy_set_header X-Forwarded-Prefix "";
 
         proxy_http_version 1.1;
         # WebSocket（DSH 的实时通道全靠它）
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
 
-        # ⚠️ 必须转发真实 Host：
-        # porthole 判断「是否本机回环免密」时会看 Host，
-        # 若这里写成固定值或漏写，可能让远程请求被误判为本机（或反之全部 401）。
+        # 必须转发真实 Host：
+        # porthole 的「本机特权令牌」判断会看 Host 是否为回环名，
+        # 固定成 127.0.0.1 会让远程请求被误判为本机。
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -90,27 +143,21 @@ server {
 }
 ```
 
-插件侧无需任何配置。
+插件侧：无需任何与前缀相关的配置（root 部署时 nginx 侧提交空 `X-Forwarded-Prefix` 即可）。
 
 ---
 
-## 三、二级目录方式
+## 四、二级目录方式（nginx 剥前缀 + 固定 `X-Forwarded-Prefix`）
 
-`https://example.com/dsh/` → `http://127.0.0.1:3082/`
+`https://example.com/dsh/` → `http://192.168.0.66:3082/`
 
-### 3.1 为什么需要插件侧配置
+这个模式下 **nginx 负责剥前缀**（`proxy_pass` 带尾斜杠），并把**外部前缀**通过
+`X-Forwarded-Prefix` 告诉 porthole。porthole 内部收到的 `req.url` 已经是剥好前缀的 `/…`，
+它**始终原样转发**，不会重复 strip；`X-Forwarded-Prefix` 只用来表示「这个请求在外部是从
+`/dsh/` 那棵子树进来的」，用于生成正确的 `Location`、`Cookie Path` 及固定登录入口的落点。
+porthole 只信任该头来生成对外 cookie/redirect。
 
-DSH 前端本身是**相对路径**的（`<base href="./">`、RPC 用 `${channel}/${endpoint}` 去掉前导斜杠），
-所以把前缀剥掉后，页面、API、WebSocket 都能正常工作。
-
-需要插件配合的只有它**自己生成的两个站内绝对路径**：
-
-1. 扫码免密登录后返回的 `302 Location`（否则浏览器被甩回站点根，离开 `/dsh/`）；
-2. 会话 Cookie 的 `Path`（否则同一域名下的其它应用也会收到这枚令牌）。
-
-把 `basePath` 告诉插件即可，它会据此拼出 `/dsh/...` 与 `Path=/dsh`。
-
-### 3.2 nginx 配置
+### 4.1 nginx 配置
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -128,108 +175,144 @@ server {
 
     client_max_body_size 100m;
 
-    # 少了尾斜杠会让所有相对路径解析错位（经典坑），这里强制补上
+    # 入口补斜杠：访问 /dsh 时跳到 /dsh/。
+    # absolute_redirect off 保留 Location 中的站内路径，不补成内部 HTTP 地址。
     location = /dsh {
+        absolute_redirect off;
         return 301 /dsh/;
     }
 
     location /dsh/ {
-        # ⚠️ 关键：**不要**带尾斜杠。
-        #
-        # 设了 basePath 后，porthole 自己是严格模式的：它只接受 /dsh/... 开头的路径，
-        # 并自己把前缀剥掉再转发给 DSH。nginx 若也用尾斜杠替它剥（/dsh/ → /），
-        # porthole 收到的是 /，会被判成"未挂载路径"直接 404。
-        #
-        # 正确做法：原样透传 /dsh/...，让 porthole 做唯一的前缀处理者。
-        proxy_pass http://127.0.0.1:3082;
+        # ⚠️ 关键：**带尾斜杠**。nginx 会把 /dsh/ 前缀剥掉再转给 porthole，
+        # porthole 收到的就是 /…（内部路径），它不会再剥一次。
+        proxy_pass http://192.168.0.66:3082/;
 
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
 
+        # 保留真实 Host（用于回环/桌面判断，不要写成固定 127.0.0.1）
         proxy_set_header Host              $host;
+
+        # 上报外部前缀。用固定值覆盖客户端可能自带的同名头，
+        # 防止伪造；它只代表「外部路径」，不改变 porthole 看到的内部 req.url。
+        proxy_set_header X-Forwarded-Prefix /dsh;
+
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
+        # SSE / WebSocket 长连接
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
 
-        # 上游若返回站内绝对路径（插件已带前缀，这里是兜底）
-        proxy_redirect / /dsh/;
+        # 不要额外写 proxy_redirect / return 去纠正前缀：
+        # porthole 产出的 Location 已带 /dsh/，重复改写会变成 /dsh/dsh/…
     }
 }
 ```
 
-### 3.3 插件侧配置
+> 上面用 `192.168.0.66:3082` 表示 porthole 所在机器的地址（异机 nginx 场景）。
+> 若 nginx 与 porthole 同机，把 `proxy_pass` 换成 `http://127.0.0.1:3082/` 即可，
+> 且无需配置 `trustedProxies`（默认信任回环）。
 
-**方式一：设置面板（推荐，改完立即生效，无需重启）**
+### 4.2 插件侧配置
 
-进 **设置 → 远程访问 → 反向代理接入**：
+**同机 nginx**：不用动 `trustedProxies`，默认信任回环即可。
 
-- 「二级目录」填 `/dsh`（与 nginx 的 `location` 前缀逐字一致，不要带尾斜杠）；
-- 「监听地址」按需选择；
-- 点「应用并保存」。
-
-`basePath` 只影响插件未来产出的 `Location` 与 `Cookie Path`，保存后**立刻生效**；
-`host` 会触发一次代理重启（需要重新 bind 网卡）。改动都会写入
-`~/.dsh/dsh-porthole/config.json`，重启宿主后依然保持。
-
-> ⚠️ 填错会怎样：登录跳转会落到 nginx 未配置的路径上，表现为扫码后 404。
-> **救援方式**：在电脑上用 `http://127.0.0.1:3082` 打开面板（本机免密，不受 basePath 影响），
-> 或编辑 `config.json` 里的 `basePath` 后重启宿主。
-
-**方式二：配置文件**
+**异机 nginx**：把 nginx 机器的真实 IP 加进 `trustedProxies`（精确 socket 对端，不是客户端 IP、不是 `X-Forwarded-For`）：
 
 ```yaml
 - name: 'dsh-porthole'
   config:
     port: 3082
-    basePath: /dsh        # 与 nginx 的 location 前缀一致；不要带尾斜杠
-    host: 0.0.0.0         # 只让 nginx 访问时改 127.0.0.1
+    host: 0.0.0.0
+    trustedProxies:
+      - '192.168.0.10'           # nginx 服务器真实 IP（socket 对端），不是客户端、不是 XFF
 ```
 
-等价写法：`publicPath: /dsh`。改完需重启宿主生效。
+访问 `https://example.com/dsh/` 即可。
 
-> 优先级：**面板保存的值优先于 `cordis.yml`**。两者都有时以 `config.json` 为准，
-> 这样面板里的改动不会被下次重启覆盖回去。
+### 4.3 前缀合法性（porthole 会校验）
 
-访问 `https://example.com/dsh/` 即可。面板顶部的「访问地址」与二维码会自动带上 `/dsh` 前缀。
+`X-Forwarded-Prefix` 接受以下前缀：
 
-### 3.4 二级目录的已知限制
+- 接受：空串 `''` 或 `/` 表示「根」；合法的 `/dsh`、`/tools/dsh/`（会归一化为不带尾斜杠的规范值）；
+- 拒绝：协议相对 `//host`、缺前导 `/`、含 `..`、含反斜杠 `\`、含百分号编码 `%`、
+  含 query `?` 或 `#`、逗号多值、重复头、危险字符、以及超长值。
 
-| 限制 | 说明 |
-| --- | --- |
-| 必须用带尾斜杠的 URL | `https://example.com/dsh` 会被 301 到 `/dsh/`；若你的客户端不跟随跳转，请直接收藏带斜杠的地址 |
-| 根路径与未挂载路径被拒 | 设了 basePath 即**强制严格模式**：`/` 会 302 到 `/dsh/`，其它未挂载路径返回 404。没有关闭开关 |
-| nginx 必须不剥前缀 | 见 §3.2 的 `proxy_pass` 注释：带尾斜杠会让 porthole 收到 `/` 而被判为未挂载路径 |
-| 局域网扫码地址与对外地址不同 | 二维码里是 `http://<局域网IP>:3082/`（不带 `/dsh`）。经 nginx 访问时请手动打开 `/dsh/` |
-| 子目录下 `basePath` 必须与 nginx 前缀逐字一致 | 写成 `/dsh/` 或 `/DSH` 都不会生效（插件会归一化并拒绝非法值，日志里会有提示） |
+处理策略：
+
+- **来自不可信来源**的头：直接**忽略**（当作没有该前缀，按根处理）；
+- **来自可信代理但值非法**的：`HTTP` / `WS` 一律返回 `400`（不静默放行）。
+
+> 有效外部前缀是**请求级**的：只作用于当前这一次请求，不会改写共享实例，
+> 也不会串味到下一个直连请求。
 
 ---
 
-## 四、排错
+## 五、局域网展示、二维码与对外域名
+
+- 面板顶部的「访问地址」、复制按钮、二维码始终使用真实局域网根地址，
+  例如 `http://192.168.1.103:3082/`；nginx 的外部挂载前缀不会加入这些直连地址。
+- 这些地址**不会**从 `Host` / `Origin` / 单次代理头里去「猜」你的公开域名——一次代理头不足以
+  安全推断对外域名，猜错会把二维码指到不存在的地址。porthole 也不引入 `publicUrl` 这类新配置。
+- 经 nginx 对外访问时，请直接用你的外部域名 + 前缀（如 `https://example.com/dsh/`）；
+  二维码里的局域网地址只适合同一局域网内扫码。
+
+---
+
+## 六、BrowserSkill（`/bsk-observation/`）临时兼容
+
+BrowserSkill 的观察接口在客户端里写成了**根绝对路径**（`/bsk-observation/…`），
+挂在 `/dsh/` 下时它会绕过前缀直打站点根。短期兼容方案是在 nginx 里把根下的
+`/bsk-observation/` 307 回 `/dsh` 子树（**这不会放宽门禁**，只是把请求挪回正确前缀）：
+
+```nginx
+# 放在 server{} 内、/dsh/ location 之外
+location /bsk-observation/ {
+    absolute_redirect off;           # 生成站内路径，避免用 server_name 拼绝对 URL
+    return 307 /dsh$request_uri;     # /bsk-observation/x → /dsh/bsk-observation/x
+}
+```
+
+- 用 `307` 保持方法与请求体不变（观察接口含 POST）；
+- `$request_uri` 保留原始路径与 query；
+- `absolute_redirect off` 保证跳转目标是站内绝对路径，不会变成协议相对或带内部端口的绝对 URL；
+- 这是**临时兜底**，正解仍是 BrowserSkill 客户端改用 document-relative 路径；porthole 侧
+  **不会**为此放宽观察接口的回环门禁。
+
+---
+
+## 七、排错
 
 | 现象 | 原因 |
 | --- | --- |
-| 打开 `/dsh/` 是空白页，控制台大量 404 | `proxy_pass` 少了尾斜杠，或 `location` 少了尾斜杠 |
+| 打开 `/dsh/` 是空白页，控制台大量 404 | `proxy_pass` 少了尾斜杠（nginx 没剥前缀），或 `location` 少了尾斜杠 |
+| 出现 `/dsh/dsh/…` 双前缀 | 又额外写了 `proxy_redirect`/`return` 去补前缀；去掉多余的 `proxy_redirect` 即可 |
 | 页面能开但一直转圈 / 实时不更新 | 少了 `Upgrade` / `Connection` 头，WebSocket 没连上 |
-| 扫码登录后跳到站点根 404 | 插件 `basePath` 没配或与 nginx 前缀不一致 |
-| 设了密码却不用输就能进 | nginx 把 `Host` 改成了 `127.0.0.1`（或没转发 Host）。porthole 以 Host 判定回环身份，务必 `proxy_set_header Host $host;` |
-| 登录后立刻又退回登录页 | Cookie `Path` 与访问路径不匹配；确认 `basePath` 与 location 一致 |
+| 深层链接跳回了 `/dsh/` 登录页 | 未登录导航请求按设计 302 回入口；登录后即可直达 |
+| API / SSE 拿到一页 HTML 或 302 | 不该发生：API/SSE/POST 应得 `401 JSON`。若见到 HTML，说明前缀/挂载配错，请求被当成页面导航 |
+| 设了密码却不用输就能进 | nginx 把 `Host` 改成 `127.0.0.1`（或没转发 Host）。务必 `proxy_set_header Host $host;` |
+| 登录后立刻又退回登录页 | Cookie `Path` 与访问路径不匹配；确认 nginx 已用固定值上报 `X-Forwarded-Prefix /dsh` |
+| 异机 nginx 下前缀不生效 / 被当成不可信 | `trustedProxies` 没加 nginx 真实 IP；默认只信回环 |
+| 可信代理发来非法前缀后 `400` | 前缀含 `..`、`%`、`?`、`,`、`\`、`//`、超长等；改成合法 `/dsh` 形态 |
+| BrowserSkill 观察面板 404 | 见第七节的临时 `location /bsk-observation/` 307 兜底 |
 | 上传附件 413 | 调大 `client_max_body_size` |
 | 长时间无操作后页面断连 | 调大 `proxy_read_timeout`；porthole 自身每 25s 发 SSE 保活帧，通常不会触发 |
 
 ---
 
-## 五、安全清单
+## 八、安全清单
 
 - [ ] 已开启访问认证，并设置了**足够强**的访客密码
 - [ ] 已单独设置管理密码（否则访客密码即可改配置）
 - [ ] 防篡改策略设为「仅限电脑本机」或「局域网可解锁」，不是「不设防」
-- [ ] nginx 转发了真实 `Host`（否则回环免密可能误判）
+- [ ] nginx 转发了真实 `Host`（否则回环免密/桌面令牌可能误判）
+- [ ] 异机 nginx 时把 **nginx 真实 IP** 写进 `trustedProxies`（不是客户端 IP、不是 XFF）
+- [ ] 由 nginx 剥前缀并用固定值上报 `X-Forwarded-Prefix /dsh`（root 部署时头清空）
 - [ ] 3082 端口未直接暴露到公网
 - [ ] 开启 HTTPS（局域网外的明文密码等于公开）
 - [ ] 定期检查面板「安全认证」里的已登录设备数
