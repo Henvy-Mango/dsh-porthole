@@ -230,6 +230,8 @@ function BridgePanel({ rpcCall, initialStatus, initialAdminToken }) {
       // 领令牌要打到「门户实际监听的地址」：
       //   - 绑到具体网卡（如 192.168.1.103）时，回环 127.0.0.1 根本没人监听，
       //     此时只能打该网卡地址（Windows 上绑定具体 IP 不会同时监听回环）；
+      //     服务端据此场景（Host 命中绑定地址 + 桌面壳 Origin）签发令牌，
+      //     普通网页来源仍受「必须回环 Host」约束，不会被局域网设备冒用；
       //   - 桌面壳的 hostname 是 'app'，不能拿来拼 URL。
       const boundHost = s.host && s.host !== '0.0.0.0' ? s.host : null;
       const targetHost = boundHost || (isDesktopShell ? '127.0.0.1' : host);

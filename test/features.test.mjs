@@ -48,3 +48,20 @@ test('客户端构建可注册设置面板，显示访问地址、认证和工�
   for (const text of ['局域网访问', '安全认证', '工作区', '192.168.1.20:3082/', '保存监听设置', '可信前置代理']) assert.ok(html.includes(text), text);
   assert.ok(!html.includes('二级目录'));
 });
+
+test('自检的代理端口项展示实际监听地址，而非写死 0.0.0.0', async () => {
+  // Bind to a specific interface address: diagnose must echo it, not "0.0.0.0".
+  const service = new BridgeLiteService({ dshPort: 1, port: 0, host: '192.168.0.66' });
+  // Stub a started proxy so the check reports "listening" without real IO.
+  service.proxy = { host: '192.168.0.66', port: 0 };
+  const { checks } = await service.diagnose();
+  const proxyCheck = checks.find((c) => c.id === 'proxy');
+  assert.ok(proxyCheck, 'proxy check present');
+  assert.equal(proxyCheck.detail, '监听 192.168.0.66:0');
+
+  // Default/wide bind still reads 0.0.0.0.
+  const wide = new BridgeLiteService({ dshPort: 1, port: 0, host: '0.0.0.0' });
+  wide.proxy = { host: '0.0.0.0', port: 0 };
+  const wideCheck = (await wide.diagnose()).checks.find((c) => c.id === 'proxy');
+  assert.equal(wideCheck.detail, '监听 0.0.0.0:0');
+});

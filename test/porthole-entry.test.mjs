@@ -124,3 +124,41 @@ test('实时通道与本机令牌：WS Origin 校验、SSE 首帧、loopback-tok
     assert.ok(new BridgeLiteService({ dshPort: 3080, port: 3082 }).allowedOrigins().includes('http://localhost:3080'));
   });
 });
+
+test('桌面壳 + 绑具体网卡：Host 命中绑定地址时签发本机令牌，普通网页来源仍拒绝', async () => {
+  const { listAllLanIPv4 } = await import('../lib/net.js');
+  const lanIp = listAllLanIPv4()[0]?.address;
+  if (!lanIp) { console.log('skip: no LAN IPv4'); return; }
+  const { LiteProxy } = await import('../lib/proxy.js');
+  const { AuthManager } = await import('../lib/auth/manager.js');
+  const { DESKTOP_APP_ORIGIN } = await import('../lib/proxy.js');
+  const auth = new AuthManager({ config: { enabled: true } });
+  // Bind to the concrete LAN address, mimicking a user who set host=LAN IP.
+  const proxy = new LiteProxy({ listenPort: 0, targetPort: 1, authManager: auth,
+    host: lanIp, allowedOrigins: () => [`http://${lanIp}:3082`, DESKTOP_APP_ORIGIN] });
+  await proxy.start();
+  const url = '/__dsh_porthole__/loopback-token';
+  // Connect to the bound LAN address (the shared request() helper hardcodes 127.0.0.1).
+  const hit = (headers) => new Promise((resolve) => {
+    const req = httpRequest({ host: lanIp, port: proxy.listenPort, path: url, method: 'GET', agent: false, headers }, (res) => {
+      let body = ''; res.on('data', (c) => { body += c; }); res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', () => resolve({ status: 0, body: '' }));
+    req.end();
+  });
+  try {
+    // 桌面壳来源 + Host=绑定地址 → 签发
+    const okRes = await hit({ Host: `${lanIp}:${proxy.listenPort}`, Origin: DESKTOP_APP_ORIGIN });
+    assert.equal(okRes.status, 200);
+    assert.ok(JSON.parse(okRes.body).adminToken);
+    // 普通网页来源（同 LAN 地址的 http origin）+ Host=绑定地址 → 仍拒绝（这不是本机特征）
+    const webRes = await hit({ Host: `${lanIp}:${proxy.listenPort}`, Origin: `http://${lanIp}:${proxy.listenPort}` });
+    assert.equal(webRes.status, 403);
+    // 桌面壳来源但 Host 不匹配绑定地址 → 拒绝
+    const badHost = await hit({ Host: `evil.example:${proxy.listenPort}`, Origin: DESKTOP_APP_ORIGIN });
+    assert.equal(badHost.status, 403);
+  } finally {
+    await proxy.stop();
+    auth.dispose();
+  }
+});

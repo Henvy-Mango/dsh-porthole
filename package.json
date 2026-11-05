@@ -1,8 +1,8 @@
 {
   "name": "dsh-porthole",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "DSH 本机门户：反向代理 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名/二级目录，可绑定指定网卡。",
-  "releaseNotes": "【v1.5.1】trustedProxies 语义调整：本地回环（127.0.0.1 / ::1）改为不可移除的可信基线，自定义数组在其上追加而非整体替换；空数组 [] 仍信任回环。此前自定义 trustedProxies 会连本机回环一并排除、导致同机 nginx 上报的 X-Forwarded-Prefix 被忽略；升级后同机 nginx 无需再手动列入回环地址。非法配置（主机名/端口/网段）仍 fail-closed、门户不启动。测试：12 项核心用例全部通过。",
+  "releaseNotes": "【v1.5.2】修复两项。① 自检「局域网代理端口」原写死显示 0.0.0.0，绑定具体网卡时与实际监听地址不符，改为展示实际监听地址。② 桌面壳（Electron）在本机绑定具体网卡时无法自动领取本机令牌、被迫输管理员密码：新增「桌面壳 Origin dsh-app://app + Host 命中绑定地址」的签发分支（该 Origin 网页不可伪造，普通网页来源仍受回环 Host 约束，局域网设备无法冒用）。测试：14 项核心用例全部通过。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
