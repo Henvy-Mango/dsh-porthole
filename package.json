@@ -1,9 +1,10 @@
 {
   "name": "dsh-porthole",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "DSH 本机门户：反向代理 + 双密码门禁 + 会话投影剥离 + 远程工作区管理，支持 nginx 子域名/二级目录，可绑定指定网卡。",
-  "releaseNotes": "【v1.5.2】修复两项。① 自检「局域网代理端口」原写死显示 0.0.0.0，绑定具体网卡时与实际监听地址不符，改为展示实际监听地址。② 桌面壳（Electron）在本机绑定具体网卡时无法自动领取本机令牌、被迫输管理员密码：新增「桌面壳 Origin dsh-app://app + Host 命中绑定地址」的签发分支（该 Origin 网页不可伪造，普通网页来源仍受回环 Host 约束，局域网设备无法冒用）。测试：14 项核心用例全部通过。",
+  "releaseNotes": "【v1.5.3】工程与文档更新：① 包管理器迁移到 pnpm（新增 pnpm-lock.yaml / pnpm-workspace.yaml，移除 package-lock.json，prepack 改用 pnpm）；② README 全面精简并补充项目定位、二级目录优化说明；③ nginx 文档新增通用插件根路径兼容方案；④ 变更日志独立为 CHANGELOG.md。无运行时行为变更。",
   "type": "module",
+  "packageManager": "pnpm@11.25.0",
   "main": "lib/index.js",
   "exports": {
     ".": {
@@ -18,12 +19,13 @@
     "client",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "GAP-REPORT.md"
   ],
   "scripts": {
     "build:client": "node client/build.mjs",
-    "prepack": "npm run build:client",
+    "prepack": "pnpm run build:client",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

@@ -1,0 +1,6 @@
+packages:
+  - .
+
+# esbuild 的 postinstall 需要下载当前平台的二进制；pnpm 11 默认拒绝执行依赖构建脚本。
+allowBuilds:
+  esbuild: true

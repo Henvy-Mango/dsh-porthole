@@ -93,7 +93,7 @@ porthole 有一个**固定登录入口**，它的位置是「**外部应用根**
 
 1. **仅根 `GET`/`HEAD` 且未登录**时返回 `401` + 登录 HTML；`HEAD` 不返回 body。
 2. **未登录的深层页面**（明确 `Accept: text/html` 或导航请求）跳 `302` 回到入口。
-3. **API（`/api`、`/bsk-observation` 等）、非 HTML 的 fetch、SSE、`POST`** 一律返回 `401 JSON`，
+3. **API（`/api`、插件自定义端点等）、非 HTML 的 fetch、SSE、`POST`** 一律返回 `401 JSON`，
    不返回 HTML、也不重定向——避免把脚本/事件流喂成一页登录 HTML。
 4. 根请求即便**缺少 `Accept` 头**也仍视为可登录，返回登录 HTML。
 5. 登录页固定从根位置 `fetch('./__dsh_porthole__/login')`，成功后 `location.replace('./')`，
@@ -285,25 +285,63 @@ server {
 
 ---
 
-## 六、BrowserSkill（`/bsk-observation/`）临时兼容
+## 六、插件请求路径与挂载前缀不一致时的兼容
 
-BrowserSkill 的观察接口在客户端里写成了**根绝对路径**（`/bsk-observation/…`），
-挂在 `/dsh/` 下时它会绕过前缀直打站点根。短期兼容方案是在 nginx 里把根下的
-`/bsk-observation/` 307 回 `/dsh` 子树（**这不会放宽门禁**，只是把请求挪回正确前缀）：
+有些插件会把接口写成**站点根绝对路径**（例如 BrowserSkill 的 `/bsk-observation/…`），
+而不是相对于当前页面的路径。porthole 挂在 `/dsh/` 这类子目录时，这些请求会绕过前缀直打站点根，
+表现为 404，或者落到根上的其他应用。
+
+### 怎么判断
+
+打开浏览器 DevTools → Network，检查失败请求的 URL：
+
+- 正常（带前缀）：`/dsh/api/…`、`/dsh/plugins/…`
+- 异常（绕过前缀）：`/bsk-observation/…`、`/some-plugin/…`
+
+如果请求路径属于某个插件的接口、但没有 `/dsh` 前缀，就属于这一类问题。
+
+### 通用 nginx 配置
+
+在 `server {}` 内、挂载用的 `location /dsh/` 之外，为每个被写死的根路径加一段 307 兜底：
 
 ```nginx
-# 放在 server{} 内、/dsh/ location 之外
-location /bsk-observation/ {
+# 模板：/dsh 换成实际挂载前缀，/plugin-api/ 换成插件实际请求的根路径
+location /plugin-api/ {
     absolute_redirect off;           # 生成站内路径，避免用 server_name 拼绝对 URL
-    return 307 /dsh$request_uri;     # /bsk-observation/x → /dsh/bsk-observation/x
+    return 307 /dsh$request_uri;     # /plugin-api/x?y → /dsh/plugin-api/x?y
 }
 ```
 
-- 用 `307` 保持方法与请求体不变（观察接口含 POST）；
-- `$request_uri` 保留原始路径与 query；
-- `absolute_redirect off` 保证跳转目标是站内绝对路径，不会变成协议相对或带内部端口的绝对 URL；
-- 这是**临时兜底**，正解仍是 BrowserSkill 客户端改用 document-relative 路径；porthole 侧
-  **不会**为此放宽观察接口的回环门禁。
+多个插件或多个根路径时重复多段即可；也可以用一个正则 location 合并：
+
+```nginx
+# 例：BrowserSkill 和另一个插件都写死了根路径
+location ~ ^/(bsk-observation|another-plugin)/ {
+    absolute_redirect off;
+    return 307 /dsh$request_uri;
+}
+```
+
+### 处理要点
+
+- 用 `307`，不要用 `301/302`：307 保留请求方法与 body，插件的 POST/PUT 不会变成 GET；
+- `$request_uri` 保留原始路径和 query string；用 `$uri` 会丢掉 query；
+- `absolute_redirect off` 让 `Location` 生成站内绝对路径，避免带内部端口或协议相对地址；
+- 307 只做路径接回，不绕过门禁：跳到 `/dsh/...` 后仍是同一站点，Cookie（`Path=/dsh`）会正常携带；
+- 若插件写死的是 **WebSocket** 根路径，不要依赖 307（部分客户端不跟随升级重定向），应单独
+  `proxy_pass` 并转发 `Upgrade` / `Connection` 头。
+
+### 根治方式
+
+nginx 兜底只是兼容层。正解是让插件客户端使用 document-relative 路径，例如：
+
+```js
+// 不要写死 /bsk-observation
+const eventsUrl = new URL('./bsk-observation/events', document.baseURI);
+```
+
+这样无论挂在 `/`、`/dsh/` 还是其他前缀下都能正常工作。porthole 不会为了兼容写死根路径的插件
+而放宽门禁或路径校验。
 
 ---
 
@@ -320,7 +358,7 @@ location /bsk-observation/ {
 | 登录后立刻又退回登录页 | Cookie `Path` 与访问路径不匹配；确认 nginx 已用固定值上报 `X-Forwarded-Prefix /dsh` |
 | 异机 nginx 下前缀不生效 / 被当成不可信 | `trustedProxies` 没加 nginx 真实 IP；默认只信回环 |
 | 可信代理发来非法前缀后 `400` | 前缀含 `..`、`%`、`?`、`,`、`\`、`//`、超长等；改成合法 `/dsh` 形态 |
-| BrowserSkill 观察面板 404 | 见第七节的临时 `location /bsk-observation/` 307 兜底 |
+| 插件接口 404 / 请求落到站点根（如 BrowserSkill 的 `/bsk-observation/*`） | 插件写死了根绝对路径；按第六节加 307 location 把请求接回 `/dsh` 前缀 |
 | 上传附件 413 | 调大 `client_max_body_size` |
 | 长时间无操作后页面断连 | 调大 `proxy_read_timeout`；porthole 自身每 25s 发 SSE 保活帧，通常不会触发 |
 

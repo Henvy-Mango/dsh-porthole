@@ -7,18 +7,7 @@
 **范围约定**：只保留「网页转发 + 局域网 + 访问安全认证 + 会话投影剥离 + 远程工作区管理（无手机端 UI）」，
 其余能力一律不实现。本报告逐项列出被移除的能力、移除理由、以及**用户实际会感知到的后果**与**替代办法**。
 
-> **v1.1.1**：修复 DSH ≥0.1.5 上插件不激活的宿主回归（§5.2）；网卡识别加固。
-> **v1.2.0**：迁移会话投影剥离与远程工作区管理（修掉上游 `this.ctx` 未赋值导致工作区从不真正注册的 bug）；
-> §5.1 polyfill 实测关闭；插件更名为 `dsh-porthole`。
-> **v1.4.0**：监听地址可绑定任意本机网卡；面板访问地址与二维码跟随监听地址；
-> 修复桌面版（`dsh-app://app`）拿不到管理员令牌；测试精简。
-> **v1.4.3**：添加工作区不再预建未持久化空会话；指定 PWA 资源支持匿名 GET/HEAD。
-> **v1.5.0**：① **二级目录改为唯一模式**：nginx 剥前缀 + 可信
-> `X-Forwarded-Prefix`，移除 `basePath` / `publicPath` 手动挂载与严格收敛逻辑；
-> ② **固定登录入口**：未登录的页面导航统一落到对外应用根，API/SSE/写请求返回 JSON 401；
-> ③ 新增 `trustedProxies`（精确 socket 对端白名单，仅信任物理连接来源 IP，不看 `X-Forwarded-For`）；
-> ④ 设置页导航图标改为自带内联 SVG；⑤ 补齐 WebSocket Origin 白名单与 `loopback-token` 来源变体；
-> ⑥ 测试保持克制，共 12 个核心用例（修复项并入既有场景断言）。
+**变更日志**：[CHANGELOG.md](./CHANGELOG.md)
 
 ---
 
@@ -545,5 +534,5 @@ porthole 只依赖 `qrcode`。原版的 `ws`（隧道客户端必需）、`@lark
 **核对方式**：`gh repo clone wenbin-wb/dsh-bridge`（`615286b`，2026-11-03，`v2.17.8`）后逐文件比对；
 `wc -l` 统计（剔除 vendored bundle）；RPC 端点表 diff（47 → 14）；依赖清单 diff；
 `diff` 校验共享模块（`session-strip.js` 与 `sse-keepalive.js` 逐字节相同，`compat.js` 相同）。
-**porthole 测试状态**：`npm test` → **12/12 通过**（认证、HTTP 转发、PWA、gzip/投影剥离、工作区、
+**porthole 测试状态**：`pnpm test` → **12/12 通过**（认证、HTTP 转发、PWA、gzip/投影剥离、工作区、
 设置面板、可信代理前缀与固定登录入口、WebSocket/SSE）。
