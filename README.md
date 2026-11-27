@@ -27,7 +27,9 @@ porthole 专注反向代理与内网穿透接入。外部链路交给 frps / Eas
 | 固定登录入口 | 站点根或 `/dsh/` 固定登录；未登录页面导航回入口，API/SSE/POST 返回 401 JSON |
 | 地址展示 | 面板地址、复制按钮、二维码统一使用真实局域网根地址 |
 | 保留 DSH 压缩 | 透传 `Accept-Encoding`，主 bundle 941 KB → 320 KB |
-| 会话投影剥离 | `session/list` 移除 `contextHeaders` / `contextTimeline`（每会话可达数 MB），失败时原样直通 |
+| ETag 再验证 | 首页及缺少 ETag 的脚本、样式和静态媒体由代理补校验器，内容未变时返回 304 |
+| 回环长连接 | 到 DSH 的上游请求复用 keep-alive 连接（不转发客户端的 `Connection` 头，挂在 nginx 后同样生效），GET/HEAD 遇陈旧连接自动重试一次 |
+| 会话投影剥离 | `session/list` 移除 `contextHeaders` / `contextTimeline`；失败时原样直通 |
 | 多网卡识别 | 物理网卡优先，WSL / Docker / 虚拟网卡降权 |
 | 二维码 | 扫码免密；开启门禁时内嵌 256-bit token |
 | 双密码门禁 | 访客密码 + 管理密码，PBKDF2-SHA256 600k 迭代 |
@@ -55,11 +57,14 @@ dsh plugin --profile desktop add .
 ```yaml
 - name: 'dsh-porthole'
   config:
-    port: 3082          # 1024–65535
-    host: 0.0.0.0       # 0.0.0.0 / 127.0.0.1 / 本机网卡 IP
-    sseKeepalive: true  # SSE 空闲保活
+    port: 3082            # 1024–65535
+    host: 0.0.0.0         # 0.0.0.0 / 127.0.0.1 / 本机网卡 IP
+    sseKeepalive: true    # SSE 空闲保活
+    etagRevalidate: true  # 首页与静态资源的 ETag 再验证
     # trustedProxies: ['192.168.0.10']  # 默认只信 127.0.0.1 / ::1
 ```
+
+**ETag 再验证**（`etagRevalidate`）适用于首页和缺少上游 ETag 的脚本、样式及静态媒体。代理每次先向 DSH 取当前内容，再与浏览器持有的副本比较。内容一致时返回 `304`，内容变化时返回上游的响应体和编码。原来没有缓存策略或要求重新验证的响应使用 `private, no-cache`。
 
 `host` 也能在面板 **设置 → 远程访问 → 局域网访问** 修改，面板中的值优先于 `cordis.yml`。`trustedProxies` 只在 `cordis.yml` 配置，自定义值会追加到回环基线；异机 nginx 填 nginx 机器的真实 IP。
 

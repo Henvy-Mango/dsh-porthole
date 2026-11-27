@@ -53,7 +53,10 @@ export async function withProxy(opts, run) {
     if (opts.password) await auth.setPassword(opts.password);
     upstream = await listen(server);
     proxy = new LiteProxy({ listenPort: 0, targetPort: upstream.port, authManager: auth,
-      trustedProxies: opts.trustedProxies, allowedOrigins: () => opts.origins ?? ['http://127.0.0.1:3082'] });
+      trustedProxies: opts.trustedProxies, allowedOrigins: () => opts.origins ?? ['http://127.0.0.1:3082'],
+      ...(opts.proxyOptions ?? {}) });
+    // 启动前的实例级调整（例如调小内部上限以覆盖防御路径）
+    opts.configureProxy?.(proxy);
     await proxy.start();
     await run({ proxy, port: proxy.listenPort, auth, upstream: { ...upstream, seen } });
   } finally {

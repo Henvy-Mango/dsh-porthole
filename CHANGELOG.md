@@ -2,6 +2,12 @@
 
 本文件记录 dsh-porthole 的版本变更。
 
+## v1.6.0 - 2026-11-26
+
+- **ETag 再验证**。首页与缺少 ETag 的脚本、样式及静态媒体由代理补校验器。代理先取上游当前内容，内容一致时返回 `304`，沿用 DSH 的 gzip 响应。可用 `etagRevalidate: false` 关闭。
+- **上游连接复用**。普通 HTTP 转发剔除逐跳请求头，复用到 DSH 的回环连接。复用连接提前关闭时，代理可重试一次尚未返回响应的 GET/HEAD。
+- **会话投影剥离后 gzip**。实际剥离字段后，为支持 gzip 的客户端异步压缩响应。无需剥离的响应按上游编码原样转发。
+
 ## v1.5.3 - 2026-11-06
 
 - 包管理器从 npm 迁移到 pnpm：新增 `pnpm-lock.yaml` / `pnpm-workspace.yaml`，移除 `package-lock.json`，`prepack` 改用 pnpm。
